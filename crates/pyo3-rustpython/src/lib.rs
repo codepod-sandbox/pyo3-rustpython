@@ -1,3 +1,4 @@
+pub mod conversion;
 pub mod err;
 pub mod exceptions;
 pub mod instance;
@@ -5,6 +6,7 @@ pub mod python;
 pub mod slots;
 pub mod types;
 
+pub use conversion::{FromPyObject, IntoPy, IntoPyObject, ToPyObject};
 pub use err::{PyErr, PyResult};
 pub use instance::{Bound, Py};
 pub use python::Python;
@@ -39,10 +41,14 @@ unsafe impl Send for SyncModuleDefPtr {}
 pub use paste;
 
 pub mod prelude {
+    pub use crate::conversion::{FromPyObject, IntoPy, IntoPyObject, ToPyObject};
     pub use crate::err::{PyErr, PyResult};
     pub use crate::instance::{Bound, Py};
     pub use crate::python::Python;
-    pub use crate::types::{PyAny, PyModule};
+    pub use crate::types::{
+        PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyIterator, PyList, PyLong, PyModule,
+        PyNone, PySet, PyString, PyTuple, PyType,
+    };
     pub use crate::Pyo3Accessors;
     pub use pyo3_rustpython_derive::{pyclass, pyfunction, pymethods, pymodule};
 
