@@ -4,6 +4,7 @@ members = [
     "crates/pyo3-rustpython-derive",
     "examples/hello",
     "examples/point",
+    "examples/phase2-test",
 ]
 resolver = "2"
 

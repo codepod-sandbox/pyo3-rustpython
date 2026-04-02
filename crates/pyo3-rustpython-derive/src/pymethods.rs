@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{FnArg, ImplItem, ImplItemFn, ItemImpl, Pat, Result};
+use quote::{format_ident, quote};
+use syn::{FnArg, ImplItem, ImplItemFn, ItemImpl, Pat, Result, ReturnType};
 
 /// Expand `#[pymethods]` on an impl block.
 ///
@@ -76,10 +76,18 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
         // Regular method (including magic methods like __repr__, __str__).
         // RustPython's #[pymethod] handles dunder names automatically.
         let cleaned = strip_pyo3_method_attrs(method);
-        transformed_items.push(quote! {
-            #[pymethod]
-            #cleaned
-        });
+        if returns_pyo3_result(&cleaned.sig.output) {
+            // Method returns pyo3::PyResult<T>. RustPython's #[pymethod]
+            // expects rustpython_vm::PyResult<T>. Generate a wrapper that
+            // calls the user's method and converts the error type.
+            let wrapper = generate_pyresult_wrapper(&cleaned);
+            transformed_items.push(wrapper);
+        } else {
+            transformed_items.push(quote! {
+                #[pymethod]
+                #cleaned
+            });
+        }
     }
 
     // Build the pyclass attribute for the impl block.
@@ -205,4 +213,96 @@ fn strip_pyo3_method_attrs(method: &ImplItemFn) -> ImplItemFn {
         .attrs
         .retain(|attr| !pyo3_attrs.iter().any(|name| attr.path().is_ident(name)));
     cleaned
+}
+
+/// Check if a return type contains `PyResult`.
+fn returns_pyo3_result(ret: &ReturnType) -> bool {
+    match ret {
+        ReturnType::Default => false,
+        ReturnType::Type(_, ty) => {
+            let s = quote!(#ty).to_string().replace(' ', "");
+            s.contains("PyResult")
+        }
+    }
+}
+
+/// Extract the inner type T from `PyResult<T>`.
+fn extract_pyresult_inner(ret: &ReturnType) -> Option<TokenStream> {
+    match ret {
+        ReturnType::Default => None,
+        ReturnType::Type(_, ty) => {
+            let s = quote!(#ty).to_string().replace(' ', "");
+            if !s.contains("PyResult") {
+                return None;
+            }
+            // Parse "PyResult<T>" or "pyo3::PyResult<T>" etc.
+            // Find the angle brackets
+            if let Some(start) = s.find('<') {
+                if let Some(end) = s.rfind('>') {
+                    let inner = &s[start + 1..end];
+                    let inner_tokens: TokenStream = inner.parse().ok()?;
+                    return Some(inner_tokens);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Generate a wrapper for a method that returns pyo3::PyResult<T>.
+///
+/// The wrapper calls the user's method (renamed with a `_pyo3_` prefix)
+/// and maps the pyo3::PyErr to rustpython_vm::PyBaseExceptionRef.
+fn generate_pyresult_wrapper(method: &ImplItemFn) -> TokenStream {
+    let fn_name = &method.sig.ident;
+    let inner_name = format_ident!("_pyo3_{}", fn_name);
+    let vis = &method.vis;
+    let attrs = &method.attrs;
+
+    // Collect parameters (skip self)
+    let params: Vec<_> = method
+        .sig
+        .inputs
+        .iter()
+        .filter(|a| !matches!(a, FnArg::Receiver(_)))
+        .collect();
+    let param_names: Vec<_> = method
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|a| {
+            if let FnArg::Typed(pt) = a {
+                if let Pat::Ident(pi) = pt.pat.as_ref() {
+                    return Some(&pi.ident);
+                }
+            }
+            None
+        })
+        .collect();
+
+    let inner_ret = &method.sig.output;
+    let inner_body = &method.block;
+
+    // Extract inner type T from PyResult<T>
+    let inner_type = extract_pyresult_inner(inner_ret).unwrap_or(quote! { () });
+
+    // Determine receiver type
+    let receiver = method.sig.inputs.first().and_then(|a| {
+        if let FnArg::Receiver(r) = a {
+            Some(quote! { #r })
+        } else {
+            None
+        }
+    });
+    let receiver = receiver.unwrap_or(quote! { &self });
+
+    quote! {
+        #(#attrs)*
+        #[pymethod]
+        #vis fn #fn_name(#receiver, #(#params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<#inner_type> {
+            self.#inner_name(#(#param_names),*).map_err(|e| ::pyo3::err::into_vm_err(e))
+        }
+
+        #vis fn #inner_name(#receiver, #(#params),*) #inner_ret #inner_body
+    }
 }
