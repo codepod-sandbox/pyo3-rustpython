@@ -14,6 +14,10 @@ use rustpython_vm::{
 
 /// Detect dunder methods on a class and wire them to the corresponding
 /// type slots. Should be called after `make_class` for user-defined types.
+///
+/// Currently handles: `__repr__`, `__str__`.
+/// TODO: Add `__hash__`, `__eq__`, `__len__`, `__getitem__`, `__setitem__`,
+///       `__iter__`, `__next__`, `__add__`, `__sub__`, etc. as needed.
 pub fn fixup_dunder_slots(class: &'static Py<PyType>, ctx: &Context) {
     let attrs = class.attributes.read();
 

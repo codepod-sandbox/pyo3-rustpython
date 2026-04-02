@@ -155,10 +155,18 @@ fn generate_accessor_impl(
         let setter = if acc.set {
             quote! {
                 .with_set(|obj: &Self, value: #field_ty| {
-                    // RustPython provides &self (immutable) for setters.
-                    // We use unsafe pointer casting to mutate the field.
-                    // This is sound because RustPython's single-threaded
-                    // execution model prevents concurrent access.
+                    // FIXME: technically UB under Rust's aliasing model.
+                    //
+                    // RustPython's PyGetSet::with_set provides `&Self`
+                    // (immutable), but we need to mutate the field.
+                    // In practice this is sound because:
+                    //   1. RustPython is single-threaded (no concurrent access)
+                    //   2. The reference comes from the heap-allocated payload
+                    //      and no other code holds a reference during the setter
+                    //
+                    // The proper fix is to use interior mutability (Cell/RefCell)
+                    // or a RustPython-native mutable access path. Tracked for
+                    // Phase 2 when we implement PyCell-equivalent functionality.
                     unsafe {
                         let obj_mut = &mut *(obj as *const Self as *mut Self);
                         obj_mut.#field_name = value;
@@ -195,7 +203,6 @@ fn generate_accessor_impl(
                 class: &'static ::rustpython_vm::Py<::rustpython_vm::builtins::PyType>,
             ) {
                 use ::rustpython_vm::AsObject;
-                type Self_ = #struct_name;
                 #(#registrations)*
             }
         }
