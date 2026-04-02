@@ -24,3 +24,6 @@ pub mod pymodule;
 #[doc(hidden)]
 pub mod trampoline;
 pub mod wrap;
+
+#[cfg(feature = "runtime-rustpython")]
+pub mod rustpython;
