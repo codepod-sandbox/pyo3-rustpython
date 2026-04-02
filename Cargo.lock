@@ -1088,6 +1088,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "point-pyo3"
+version = "0.1.0"
+dependencies = [
+ "pyo3-rustpython",
+ "rustpython",
+ "rustpython-vm",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

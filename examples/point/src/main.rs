@@ -16,8 +16,8 @@ fn main() {
 from point import Point
 
 p = Point(3.0, 4.0)
-assert repr(p) == "Point(3.0, 4.0)", f"repr: {repr(p)}"
-assert str(p) == "(3.0, 4.0)", f"str: {str(p)}"
+assert repr(p) == "Point(3, 4)", f"repr: {repr(p)}"
+assert str(p) == "(3, 4)", f"str: {str(p)}"
 assert p.x == 3.0
 assert p.y == 4.0
 assert p.distance() == 5.0, f"distance: {p.distance()}"

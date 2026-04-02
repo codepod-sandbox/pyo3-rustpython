@@ -1,6 +1,8 @@
 use proc_macro::TokenStream;
 
+mod pyclass;
 mod pyfunction;
+mod pymethods;
 mod pymodule;
 
 /// Marks a function as callable from Python.
@@ -37,14 +39,31 @@ pub fn pymodule(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Stub — `#[pyclass]` support is not yet implemented.
+/// Marks a struct as a Python class.
+///
+/// Generates RustPython's `#[pyclass]` attribute and `#[derive(PyPayload)]` on
+/// the struct. Fields annotated with `#[pyo3(get)]` and/or `#[pyo3(set)]` get
+/// auto-generated getter/setter methods via `#[pygetset]`.
 #[proc_macro_attribute]
-pub fn pyclass(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
+pub fn pyclass(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as syn::ItemStruct);
+    pyclass::expand(attr.into(), input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
 }
 
-/// Stub — `#[pymethods]` support is not yet implemented.
+/// Marks an impl block as containing Python methods for a `#[pyclass]`.
+///
+/// Transforms pyo3-style method annotations to RustPython equivalents:
+/// - `#[new]` → `Constructor` trait impl
+/// - `__repr__`, `__str__`, etc. → `#[pymethod]` (slots wired at registration)
+/// - Regular methods → `#[pymethod]`
+/// - `#[getter]` / `#[setter]` → `#[pygetset]` / `#[pygetset(setter)]`
+/// - `#[staticmethod]` / `#[classmethod]` → `#[pystaticmethod]` / `#[pyclassmethod]`
 #[proc_macro_attribute]
-pub fn pymethods(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
+pub fn pymethods(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as syn::ItemImpl);
+    pymethods::expand(attr.into(), input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
 }
