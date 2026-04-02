@@ -3,6 +3,7 @@ members = [
     "crates/pyo3-rustpython",
     "crates/pyo3-rustpython-derive",
     "examples/hello",
+    "examples/point",
 ]
 resolver = "2"
 
