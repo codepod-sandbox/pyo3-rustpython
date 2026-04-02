@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/pyo3-rustpython",
+    "crates/pyo3-rustpython-derive",
+    "examples/hello",
+]
+resolver = "2"
+
+[workspace.dependencies]
+rustpython-vm = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
+rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }

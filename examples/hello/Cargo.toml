@@ -1,0 +1,14 @@
+[package]
+name = "hello-pyo3"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hello-interp"
+path = "src/main.rs"
+
+[dependencies]
+# Use pyo3-rustpython as `pyo3` — same as a real extension would.
+pyo3 = { package = "pyo3-rustpython", path = "../../crates/pyo3-rustpython" }
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893", default-features = false }
+rustpython-vm = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name = "pyo3-rustpython"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# Expose as `pyo3` so generated code and user code both use `::pyo3::…`.
+name = "pyo3"
+
+[dependencies]
+rustpython-vm = { workspace = true }
+pyo3-rustpython-derive = { path = "../pyo3-rustpython-derive" }
+paste = "1"
+
+[features]
+default = []
+# Mirrors the pyo3 feature name so downstream can use pyo3/abi3
+abi3 = []

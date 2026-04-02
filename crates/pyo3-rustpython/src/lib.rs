@@ -1,0 +1,47 @@
+pub mod err;
+pub mod instance;
+pub mod python;
+pub mod types;
+
+pub use err::{PyErr, PyResult};
+pub use instance::{Bound, Py};
+pub use python::Python;
+pub use pyo3_rustpython_derive::{pyclass, pyfunction, pymethods, pymodule};
+
+/// Wrapper that makes a raw `PyModuleDef` pointer safe to store in a `static`.
+///
+/// `PyModuleDef` is not `Sync` because it embeds `&'static PyStrInterned` whose
+/// refcount uses `Cell`. In practice every user of this crate is single-threaded
+/// (WASM or a single-VM host), so the `unsafe impl` is sound.
+#[doc(hidden)]
+pub struct SyncModuleDefPtr(pub *const rustpython_vm::builtins::PyModuleDef);
+unsafe impl Sync for SyncModuleDefPtr {}
+unsafe impl Send for SyncModuleDefPtr {}
+
+// Re-export paste so `wrap_pyfunction!` works without callers needing it directly.
+#[doc(hidden)]
+pub use paste;
+
+pub mod prelude {
+    pub use crate::err::{PyErr, PyResult};
+    pub use crate::instance::{Bound, Py};
+    pub use crate::python::Python;
+    pub use crate::types::{PyAny, PyModule};
+    pub use pyo3_rustpython_derive::{pyclass, pyfunction, pymethods, pymodule};
+
+    pub use crate::wrap_pyfunction;
+}
+
+/// Creates a Python callable from a `#[pyfunction]`-annotated function.
+///
+/// Usage: `wrap_pyfunction!(fn_name, module_or_py)`
+///
+/// Expands to `Ok::<_, PyErr>(__pyo3_fn_<name>(module.py()))`.
+#[macro_export]
+macro_rules! wrap_pyfunction {
+    ($func:ident, $module:expr) => {
+        ::pyo3::paste::paste! {
+            Ok::<_, $crate::PyErr>([<__pyo3_fn_ $func>]($module.py()))
+        }
+    };
+}
