@@ -29,3 +29,6 @@ pub use pyclass::{build_py_class, build_py_enum, PyClassArgs};
 pub use pyfunction::{build_py_function, PyFunctionOptions};
 pub use pyimpl::{build_py_methods, PyClassMethodsType};
 pub use utils::get_doc;
+
+#[cfg(feature = "runtime-rustpython")]
+pub mod rustpython;

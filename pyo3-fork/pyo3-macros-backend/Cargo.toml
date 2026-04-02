@@ -32,4 +32,6 @@ pyo3-build-config = { path = "../pyo3-build-config", version = "=0.24.2" }
 workspace = true
 
 [features]
+default = []
 experimental-async = []
+runtime-rustpython = []
