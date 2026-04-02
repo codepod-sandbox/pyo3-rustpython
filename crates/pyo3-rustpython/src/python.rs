@@ -1,4 +1,9 @@
+use std::cell::Cell;
 use rustpython_vm::VirtualMachine;
+
+thread_local! {
+    static CURRENT_VM: Cell<Option<*const VirtualMachine>> = const { Cell::new(None) };
+}
 
 /// Represents access to the Python interpreter. Analogous to PyO3's `Python<'py>`.
 ///
@@ -13,11 +18,30 @@ impl<'py> Python<'py> {
     /// Construct from a raw VM reference. Used in generated exec-slot code.
     #[doc(hidden)]
     pub fn from_vm(vm: &'py VirtualMachine) -> Self {
+        // Stash in thread-local so with_gil can find it
+        CURRENT_VM.with(|cell| cell.set(Some(vm as *const VirtualMachine)));
         Python { vm }
     }
 
     /// Access the underlying `VirtualMachine`.
     pub fn vm(self) -> &'py VirtualMachine {
         self.vm
+    }
+
+    /// Run a closure with access to the Python interpreter.
+    ///
+    /// Retrieves the VM from a thread-local set during interpreter entry.
+    /// Panics if called outside a RustPython interpreter context.
+    pub fn with_gil<F, R>(f: F) -> R
+    where
+        F: for<'p> FnOnce(Python<'p>) -> R,
+    {
+        CURRENT_VM.with(|cell| {
+            let ptr = cell
+                .get()
+                .expect("Python::with_gil called outside RustPython interpreter context");
+            let vm = unsafe { &*ptr };
+            f(Python { vm })
+        })
     }
 }

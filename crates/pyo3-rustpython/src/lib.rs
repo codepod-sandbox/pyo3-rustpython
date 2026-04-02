@@ -1,4 +1,5 @@
 pub mod err;
+pub mod exceptions;
 pub mod instance;
 pub mod python;
 pub mod slots;

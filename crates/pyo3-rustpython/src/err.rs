@@ -1,4 +1,4 @@
-use rustpython_vm::{builtins::PyBaseException, PyRef};
+use rustpython_vm::{builtins::PyBaseException, AsObject, PyRef};
 
 /// A Python exception. Analogous to PyO3's `PyErr`.
 pub struct PyErr {
@@ -20,6 +20,17 @@ impl PyErr {
         self.inner
     }
 
+    /// Create a new exception of type `T` with arguments.
+    ///
+    /// Usage: `PyErr::new::<PyValueError, _>("bad value")`
+    pub fn new<T, A>(args: A) -> Self
+    where
+        T: crate::exceptions::PyExceptionType,
+        A: Into<String>,
+    {
+        T::new_err(args)
+    }
+
     /// Create a `ValueError` with the given message.
     pub fn new_value_error(py: crate::Python<'_>, msg: impl Into<String>) -> Self {
         PyErr { inner: py.vm.new_value_error(msg.into()) }
@@ -28,6 +39,36 @@ impl PyErr {
     /// Create a `TypeError` with the given message.
     pub fn new_type_error(py: crate::Python<'_>, msg: impl Into<String>) -> Self {
         PyErr { inner: py.vm.new_type_error(msg.into()) }
+    }
+
+    /// Get the exception value as a `Bound<'py, PyAny>`.
+    pub fn value<'py>(&self, py: crate::Python<'py>) -> crate::Bound<'py, crate::types::PyAny> {
+        let obj: rustpython_vm::PyObjectRef = self.inner.clone().into();
+        crate::Bound::from_object(py, obj)
+    }
+
+    /// Check if this exception is an instance of type `T`.
+    pub fn is_instance_of<T: crate::exceptions::PyExceptionType>(&self, py: crate::Python<'_>) -> bool {
+        let exc_type = T::type_object_raw(py);
+        let obj: &rustpython_vm::PyObject = self.inner.as_ref();
+        obj.fast_isinstance(exc_type)
+    }
+
+    /// Check if this exception matches a given type.
+    pub fn matches<T: crate::exceptions::PyExceptionType>(&self, py: crate::Python<'_>) -> bool {
+        self.is_instance_of::<T>(py)
+    }
+}
+
+impl std::fmt::Display for PyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.inner.as_object())
+    }
+}
+
+impl std::fmt::Debug for PyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PyErr({:?})", self.inner.as_object())
     }
 }
 
