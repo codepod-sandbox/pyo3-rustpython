@@ -5,6 +5,7 @@ members = [
     "examples/hello",
     "examples/point",
     "examples/phase2-test",
+    "examples/rpds",
 ]
 resolver = "2"
 

@@ -100,3 +100,39 @@ impl<'py> Bound<'py, PyDict> {
         Ok(dict.contains_key(&*key_obj, vm))
     }
 }
+
+/// Iterator over `(key, value)` pairs of a `Bound<'py, PyDict>`.
+pub struct BoundDictIterator<'py> {
+    py: Python<'py>,
+    items: Vec<(PyObjectRef, PyObjectRef)>,
+    index: usize,
+}
+
+impl<'py> Iterator for BoundDictIterator<'py> {
+    type Item = (Bound<'py, PyAny>, Bound<'py, PyAny>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.items.len() {
+            let (k, v) = self.items[self.index].clone();
+            self.index += 1;
+            Some((Bound::from_object(self.py, k), Bound::from_object(self.py, v)))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'py> IntoIterator for &Bound<'py, PyDict> {
+    type Item = (Bound<'py, PyAny>, Bound<'py, PyAny>);
+    type IntoIter = BoundDictIterator<'py>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let dict = self.obj.downcast_ref::<RpDict>().expect("Bound<PyDict> must wrap a dict");
+        let items: Vec<(PyObjectRef, PyObjectRef)> = dict.into_iter().collect();
+        BoundDictIterator {
+            py: self.py,
+            items,
+            index: 0,
+        }
+    }
+}

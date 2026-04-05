@@ -52,12 +52,8 @@ pub trait IntoPy<T> {
 // extract() on Bound<'py, PyAny>
 // ---------------------------------------------------------------------------
 
-impl<'py> Bound<'py, PyAny> {
-    /// Extract a Rust value from this Python object.
-    pub fn extract<T: FromPyObject<'py>>(&self) -> PyResult<T> {
-        T::extract_bound(self)
-    }
-}
+// NOTE: extract() is defined generically on Bound<'py, T> in instance.rs
+// so it's available for all Bound types, not just Bound<'py, PyAny>.
 
 // ---------------------------------------------------------------------------
 // Helper: bridge RustPython's PyResult to ours
@@ -428,6 +424,19 @@ impl<'py> IntoPyObject<'py> for Bound<'py, PyAny> {
 }
 
 // ---------------------------------------------------------------------------
+// Py<PyAny>: IntoPyObject for references
+// ---------------------------------------------------------------------------
+
+impl<'py> IntoPyObject<'py> for &crate::Py<PyAny> {
+    type Target = PyAny;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
+        Ok(Bound::from_object(py, self.obj.clone()))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PyObjectRef: pass-through conversion
 // ---------------------------------------------------------------------------
 
@@ -443,5 +452,33 @@ impl<'py> IntoPyObject<'py> for PyObjectRef {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
         Ok(new_bound(py, self))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IntoPyArgs: convert to a Vec of positional arguments
+// ---------------------------------------------------------------------------
+
+/// Trait for converting something into Python positional arguments.
+pub trait IntoPyArgs<'py> {
+    fn into_py_args(self, py: Python<'py>) -> PyResult<Vec<PyObjectRef>>;
+}
+
+impl<'py, T: Into<PyObjectRef>> IntoPyArgs<'py> for (T,) {
+    fn into_py_args(self, _py: Python<'py>) -> PyResult<Vec<PyObjectRef>> {
+        Ok(vec![self.0.into()])
+    }
+}
+
+impl<'py> IntoPyArgs<'py> for (&crate::Py<PyAny>,) {
+    fn into_py_args(self, _py: Python<'py>) -> PyResult<Vec<PyObjectRef>> {
+        Ok(vec![self.0.obj.clone()])
+    }
+}
+
+// Py<PyAny> conversion to FromPyObject
+impl<'py> FromPyObject<'py> for crate::Py<PyAny> {
+    fn extract_bound(obj: &Bound<'py, PyAny>) -> PyResult<Self> {
+        Ok(crate::Py::from_object(obj.obj.clone()))
     }
 }

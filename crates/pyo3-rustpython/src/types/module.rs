@@ -14,6 +14,16 @@ use crate::{
 /// Marker type for a Python module object. Analogous to PyO3's `PyModule`.
 pub struct PyModule;
 
+impl PyModule {
+    /// Import a Python module by name. Equivalent to `import name`.
+    pub fn import<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyModule>> {
+        let vm = py.vm;
+        let interned = vm.ctx.intern_str(name);
+        let module = from_vm_result(vm.import(interned, 0))?;
+        Ok(Bound::from_object(py, module))
+    }
+}
+
 impl<'py> Bound<'py, PyModule> {
     /// Construct from a raw `PyObjectRef` known to be a module.
     #[doc(hidden)]

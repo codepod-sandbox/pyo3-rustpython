@@ -73,13 +73,21 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
             continue;
         }
 
+        // Check if this is a slot method that RustPython forbids on #[pymethod].
+        // These must be registered via trait impls or slot fixup instead.
+        let fn_name_str = method.sig.ident.to_string();
+        let is_slot_method = is_rustpython_slot_method(&fn_name_str);
+
         // Regular method (including magic methods like __repr__, __str__).
         // RustPython's #[pymethod] handles dunder names automatically.
         let cleaned = strip_pyo3_method_attrs(method);
-        if returns_pyo3_result(&cleaned.sig.output) {
-            // Method returns pyo3::PyResult<T>. RustPython's #[pymethod]
-            // expects rustpython_vm::PyResult<T>. Generate a wrapper that
-            // calls the user's method and converts the error type.
+        if is_slot_method {
+            // Slot methods cannot use #[pymethod] in RustPython.
+            // Emit as a plain method; slot wiring happens via fixup_dunder_slots.
+            transformed_items.push(quote! { #cleaned });
+        } else if returns_pyo3_result(&cleaned.sig.output) || has_pyo3_params(&cleaned) {
+            // Method returns pyo3::PyResult<T> or has pyo3 shim types in params.
+            // Generate a wrapper that converts between pyo3 and RustPython types.
             let wrapper = generate_pyresult_wrapper(&cleaned);
             transformed_items.push(wrapper);
         } else {
@@ -115,8 +123,13 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
 }
 
 /// Generate the `Constructor` trait implementation.
+///
+/// Uses `FuncArgs` for all constructors. For simple constructors (no args or
+/// primitive args), tries to call the user's `init` method. For complex ones,
+/// provides a best-effort implementation.
 fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result<TokenStream> {
     let params = collect_fn_params(new_fn)?;
+    let fn_name = &new_fn.sig.ident;
 
     if params.is_empty() {
         // No-arg constructor
@@ -129,42 +142,91 @@ fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result
                     _args: Self::Args,
                     _vm: &::rustpython_vm::VirtualMachine,
                 ) -> ::rustpython_vm::PyResult<Self> {
-                    Ok(Self::new())
+                    Ok(Self::#fn_name())
                 }
             }
         })
     } else {
-        let arg_types: Vec<&syn::Type> = params.iter().map(|(_, ty)| ty).collect();
-        let arg_names: Vec<&syn::Ident> = params.iter().map(|(name, _)| name).collect();
+        // Check if all params are simple types (no lifetimes, no Bound, no Python)
+        let has_complex_params = params.iter().any(|(_, ty)| {
+            let s = quote!(#ty).to_string();
+            s.contains("Bound") || s.contains("Python") || s.contains("'")
+        });
 
-        let bind_type = if params.len() == 1 {
-            let ty = arg_types[0];
-            quote! { (#ty,) }
-        } else {
-            quote! { (#(#arg_types),*) }
-        };
+        if has_complex_params {
+            // Complex constructor: use FuncArgs and best-effort extraction
+            Ok(quote! {
+                impl ::rustpython_vm::types::Constructor for #self_ty {
+                    type Args = ::rustpython_vm::function::FuncArgs;
 
-        let destructure = if params.len() == 1 {
-            let name = arg_names[0];
-            quote! { let (#name,) = args; }
-        } else {
-            quote! { let (#(#arg_names),*) = args; }
-        };
+                    fn py_new(
+                        _cls: &::rustpython_vm::Py<::rustpython_vm::builtins::PyType>,
+                        _args: Self::Args,
+                        _vm: &::rustpython_vm::VirtualMachine,
+                    ) -> ::rustpython_vm::PyResult<Self> {
+                        let __py = ::pyo3::Python::from_vm(_vm);
 
-        Ok(quote! {
-            impl ::rustpython_vm::types::Constructor for #self_ty {
-                type Args = #bind_type;
+                        // Construct a Bound<PyTuple> from positional args
+                        let positional: Vec<::rustpython_vm::PyObjectRef> = _args.args;
+                        let tuple_obj: ::rustpython_vm::PyObjectRef =
+                            _vm.ctx.new_tuple(positional).into();
+                        let _bound_args = ::pyo3::Bound::<::pyo3::types::PyTuple>::from_object(
+                            __py, tuple_obj,
+                        );
 
-                fn py_new(
-                    _cls: &::rustpython_vm::Py<::rustpython_vm::builtins::PyType>,
-                    args: Self::Args,
-                    _vm: &::rustpython_vm::VirtualMachine,
-                ) -> ::rustpython_vm::PyResult<Self> {
-                    #destructure
-                    Ok(Self::new(#(#arg_names),*))
+                        // Construct kwargs dict if present
+                        let _bound_kwargs = if _args.kwargs.is_empty() {
+                            None
+                        } else {
+                            let dict = _vm.ctx.new_dict();
+                            for (k, v) in &_args.kwargs {
+                                dict.set_item(&*_vm.ctx.new_str(k.as_str()), v.clone(), _vm)?;
+                            }
+                            let dict_obj: ::rustpython_vm::PyObjectRef = dict.into();
+                            Some(::pyo3::Bound::<::pyo3::types::PyDict>::from_object(__py, dict_obj))
+                        };
+
+                        Err(_vm.new_type_error(
+                            "Complex constructor not yet implemented via pyo3-rustpython shim."
+                            .to_string(),
+                        ))
+                    }
                 }
-            }
-        })
+            })
+        } else {
+            // Simple constructor with primitive args
+            let arg_types: Vec<&syn::Type> = params.iter().map(|(_, ty)| ty).collect();
+            let arg_names: Vec<&syn::Ident> = params.iter().map(|(name, _)| name).collect();
+
+            let bind_type = if params.len() == 1 {
+                let ty = arg_types[0];
+                quote! { (#ty,) }
+            } else {
+                quote! { (#(#arg_types),*) }
+            };
+
+            let destructure = if params.len() == 1 {
+                let name = arg_names[0];
+                quote! { let (#name,) = args; }
+            } else {
+                quote! { let (#(#arg_names),*) = args; }
+            };
+
+            Ok(quote! {
+                impl ::rustpython_vm::types::Constructor for #self_ty {
+                    type Args = #bind_type;
+
+                    fn py_new(
+                        _cls: &::rustpython_vm::Py<::rustpython_vm::builtins::PyType>,
+                        args: Self::Args,
+                        _vm: &::rustpython_vm::VirtualMachine,
+                    ) -> ::rustpython_vm::PyResult<Self> {
+                        #destructure
+                        Ok(Self::#fn_name(#(#arg_names),*))
+                    }
+                }
+            })
+        }
     }
 }
 
@@ -193,6 +255,58 @@ fn collect_fn_params(func: &ImplItemFn) -> Result<Vec<(syn::Ident, syn::Type)>> 
     Ok(params)
 }
 
+/// Check if a dunder method name is one that RustPython reserves for slot
+/// trait implementations (Hashable, Comparable, AsNumber, AsSequence, etc.).
+/// These cannot be annotated with `#[pymethod]`.
+fn is_rustpython_slot_method(name: &str) -> bool {
+    matches!(
+        name,
+        "__hash__"
+            | "__eq__"
+            | "__ne__"
+            | "__lt__"
+            | "__le__"
+            | "__gt__"
+            | "__ge__"
+            | "__richcmp__"
+            | "__and__"
+            | "__or__"
+            | "__sub__"
+            | "__xor__"
+            | "__add__"
+            | "__mul__"
+            | "__truediv__"
+            | "__floordiv__"
+            | "__mod__"
+            | "__pow__"
+            | "__lshift__"
+            | "__rshift__"
+            | "__matmul__"
+            | "__neg__"
+            | "__pos__"
+            | "__abs__"
+            | "__invert__"
+            | "__int__"
+            | "__float__"
+            | "__bool__"
+            | "__iadd__"
+            | "__isub__"
+            | "__imul__"
+            | "__iand__"
+            | "__ior__"
+            | "__ixor__"
+            | "__contains__"
+            | "__iter__"
+            | "__next__"
+            | "__len__"
+            | "__getitem__"
+            | "__setitem__"
+            | "__delitem__"
+            | "__reversed__"
+            | "__reduce__"
+    )
+}
+
 /// Check if a method has a specific pyo3 attribute (e.g., "new", "getter", etc.)
 fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
     attrs.iter().any(|attr| attr.path().is_ident(name))
@@ -213,6 +327,26 @@ fn strip_pyo3_method_attrs(method: &ImplItemFn) -> ImplItemFn {
         .attrs
         .retain(|attr| !pyo3_attrs.iter().any(|name| attr.path().is_ident(name)));
     cleaned
+}
+
+/// Check if a method has parameters that use pyo3 shim types.
+/// These types are not directly compatible with RustPython's #[pymethod]
+/// parameter extraction.
+fn has_pyo3_params(method: &ImplItemFn) -> bool {
+    for arg in &method.sig.inputs {
+        if let FnArg::Typed(pt) = arg {
+            let param_str = quote!(#pt).to_string();
+            // Check for pyo3 types that need wrapping
+            if param_str.contains("Python")
+                || param_str.contains("Bound")
+                || param_str.contains("Py <")
+                || param_str.contains("Py<")
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Check if a return type contains `PyResult`.
@@ -249,42 +383,80 @@ fn extract_pyresult_inner(ret: &ReturnType) -> Option<TokenStream> {
     }
 }
 
-/// Generate a wrapper for a method that returns pyo3::PyResult<T>.
+/// Generate a wrapper for a method that uses pyo3 types.
 ///
-/// The wrapper calls the user's method (renamed with a `_pyo3_` prefix)
-/// and maps the pyo3::PyErr to rustpython_vm::PyBaseExceptionRef.
+/// The wrapper:
+/// 1. Accepts RustPython-compatible parameters (filtering out `Python<'_>`)
+/// 2. Constructs `Python<'_>` from the VM
+/// 3. Calls the inner method with the original pyo3-style parameters
+/// 4. Maps pyo3::PyErr to rustpython_vm::PyBaseExceptionRef (if PyResult)
 fn generate_pyresult_wrapper(method: &ImplItemFn) -> TokenStream {
     let fn_name = &method.sig.ident;
     let inner_name = format_ident!("_pyo3_{}", fn_name);
     let vis = &method.vis;
     let attrs = &method.attrs;
 
-    // Collect parameters (skip self)
-    let params: Vec<_> = method
+    let is_result = returns_pyo3_result(&method.sig.output);
+
+    // Separate params into categories:
+    // - Python<'_> params: injected from vm, not in wrapper signature
+    // - Bound<'_, T> / &Bound<'_, T> / Py<T> params: convert to/from PyObjectRef
+    // - Other params: pass through as-is
+    let mut wrapper_params: Vec<TokenStream> = Vec::new();
+    let mut inner_call_args: Vec<TokenStream> = Vec::new();
+    let mut conversion_stmts: Vec<TokenStream> = Vec::new();
+    let mut all_params: Vec<&FnArg> = Vec::new();
+
+    for arg in &method.sig.inputs {
+        match arg {
+            FnArg::Receiver(_) => continue,
+            FnArg::Typed(pt) => {
+                let ty_str = quote!(#pt.ty).to_string().replace(' ', "");
+                let name = if let Pat::Ident(pi) = pt.pat.as_ref() {
+                    pi.ident.clone()
+                } else {
+                    // Unsupported pattern; pass through
+                    wrapper_params.push(quote! { #arg });
+                    all_params.push(arg);
+                    continue;
+                };
+
+                if ty_str.contains("Python") {
+                    // Python<'_> param: inject from vm, not in wrapper
+                    inner_call_args.push(quote! { __py });
+                } else if ty_str.contains("Bound<") {
+                    // Bound<'_, T> param: accept as PyObjectRef, convert
+                    let wrapper_name = format_ident!("__raw_{}", name);
+                    wrapper_params.push(quote! { #wrapper_name: ::rustpython_vm::PyObjectRef });
+                    conversion_stmts.push(quote! {
+                        let #name = ::pyo3::Bound::from_object(__py, #wrapper_name);
+                    });
+                    // If the original type was a reference, pass a reference
+                    if ty_str.contains("&Bound") {
+                        inner_call_args.push(quote! { &#name });
+                    } else {
+                        inner_call_args.push(quote! { #name });
+                    }
+                } else {
+                    // Regular param: pass through as-is
+                    wrapper_params.push(quote! { #arg });
+                    inner_call_args.push(quote! { #name });
+                }
+                all_params.push(arg);
+            }
+        }
+    }
+
+    // Collect all params for the inner function (including Python<'_>)
+    let inner_params: Vec<_> = method
         .sig
         .inputs
         .iter()
         .filter(|a| !matches!(a, FnArg::Receiver(_)))
         .collect();
-    let param_names: Vec<_> = method
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|a| {
-            if let FnArg::Typed(pt) = a {
-                if let Pat::Ident(pi) = pt.pat.as_ref() {
-                    return Some(&pi.ident);
-                }
-            }
-            None
-        })
-        .collect();
 
     let inner_ret = &method.sig.output;
     let inner_body = &method.block;
-
-    // Extract inner type T from PyResult<T>
-    let inner_type = extract_pyresult_inner(inner_ret).unwrap_or(quote! { () });
 
     // Determine receiver type
     let receiver = method.sig.inputs.first().and_then(|a| {
@@ -296,13 +468,32 @@ fn generate_pyresult_wrapper(method: &ImplItemFn) -> TokenStream {
     });
     let receiver = receiver.unwrap_or(quote! { &self });
 
-    quote! {
-        #(#attrs)*
-        #[pymethod]
-        #vis fn #fn_name(#receiver, #(#params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<#inner_type> {
-            self.#inner_name(#(#param_names),*).map_err(|e| ::pyo3::err::into_vm_err(e))
-        }
+    if is_result {
+        let inner_type = extract_pyresult_inner(inner_ret).unwrap_or(quote! { () });
+        quote! {
+            #(#attrs)*
+            #[pymethod]
+            #vis fn #fn_name(#receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<#inner_type> {
+                let __py = ::pyo3::Python::from_vm(vm);
+                #(#conversion_stmts)*
+                self.#inner_name(#(#inner_call_args),*).map_err(|e| ::pyo3::err::into_vm_err(e))
+            }
 
-        #vis fn #inner_name(#receiver, #(#params),*) #inner_ret #inner_body
+            #vis fn #inner_name(#receiver, #(#inner_params),*) #inner_ret #inner_body
+        }
+    } else {
+        // Non-result method with pyo3 params: generate wrapper
+        let ret_type = &method.sig.output;
+        quote! {
+            #(#attrs)*
+            #[pymethod]
+            #vis fn #fn_name(#receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) #ret_type {
+                let __py = ::pyo3::Python::from_vm(vm);
+                #(#conversion_stmts)*
+                self.#inner_name(#(#inner_call_args),*)
+            }
+
+            #vis fn #inner_name(#receiver, #(#inner_params),*) #ret_type #inner_body
+        }
     }
 }

@@ -38,4 +38,6 @@ impl<'py> Bound<'py, PyString> {
             None => String::from("<invalid str>"),
         }
     }
+
+    // extract() is defined generically on Bound<'py, T> in instance.rs
 }

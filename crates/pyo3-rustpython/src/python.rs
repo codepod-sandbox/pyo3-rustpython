@@ -44,4 +44,26 @@ impl<'py> Python<'py> {
             f(Python { vm })
         })
     }
+
+    /// Alias for `with_gil`. pyo3 0.28 renamed `with_gil` to `attach`.
+    pub fn attach<F, R>(f: F) -> R
+    where
+        F: for<'p> FnOnce(Python<'p>) -> R,
+    {
+        Self::with_gil(f)
+    }
+
+    /// Return a Python `None` value as a `Py<PyAny>`.
+    #[allow(non_snake_case)]
+    pub fn None(self) -> crate::Py<crate::types::PyAny> {
+        let none: rustpython_vm::PyObjectRef = self.vm.ctx.none();
+        crate::Py::from_object(none)
+    }
+
+    /// Return a Python `NotImplemented` value as a `Py<PyAny>`.
+    #[allow(non_snake_case)]
+    pub fn NotImplemented(self) -> crate::Py<crate::types::PyAny> {
+        let not_impl: rustpython_vm::PyObjectRef = self.vm.ctx.not_implemented();
+        crate::Py::from_object(not_impl)
+    }
 }

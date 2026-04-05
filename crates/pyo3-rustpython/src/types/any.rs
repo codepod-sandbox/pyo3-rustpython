@@ -24,14 +24,6 @@ impl<'py> Bound<'py, PyAny> {
     // Attribute access
     // -----------------------------------------------------------------------
 
-    /// Get an attribute by name. Equivalent to Python's `getattr(obj, name)`.
-    pub fn getattr(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        let vm = self.py.vm;
-        let name_obj = vm.ctx.new_str(name);
-        let result = from_vm_result(self.obj.get_attr(&name_obj, vm))?;
-        Ok(Bound::from_object(self.py, result))
-    }
-
     /// Set an attribute by name. Equivalent to Python's `setattr(obj, name, value)`.
     pub fn setattr(&self, name: &str, value: impl Into<PyObjectRef>) -> PyResult<()> {
         let vm = self.py.vm;
@@ -47,8 +39,6 @@ impl<'py> Bound<'py, PyAny> {
     }
 
     /// Check if the object has an attribute. Equivalent to Python's `hasattr(obj, name)`.
-    ///
-    /// Returns `false` if `getattr` would raise `AttributeError`, `true` otherwise.
     pub fn hasattr(&self, name: &str) -> PyResult<bool> {
         let vm = self.py.vm;
         let name_obj = vm.ctx.new_str(name);
@@ -123,18 +113,6 @@ impl<'py> Bound<'py, PyAny> {
         method.call(args, kwargs)
     }
 
-    /// Call a method on the object with no arguments.
-    pub fn call_method0(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        let vm = self.py.vm;
-        let result = from_vm_result(vm.call_method(&self.obj, name, ()))?;
-        Ok(Bound::from_object(self.py, result))
-    }
-
-    /// Call a method on the object with positional arguments only.
-    pub fn call_method1(&self, name: &str, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, PyAny>> {
-        self.call_method(name, args, None)
-    }
-
     // -----------------------------------------------------------------------
     // Type operations
     // -----------------------------------------------------------------------
@@ -198,48 +176,58 @@ impl<'py> Bound<'py, PyAny> {
     }
 
     /// Get the hash of this object. Equivalent to Python's `hash(obj)`.
-    pub fn hash(&self) -> PyResult<i64> {
+    /// Returns isize for pyo3 compatibility.
+    pub fn hash(&self) -> PyResult<isize> {
         let vm = self.py.vm;
-        from_vm_result(self.obj.hash(vm))
+        from_vm_result(self.obj.hash(vm)).map(|h| h as isize)
     }
+
+    // Note: eq, ne, lt, le, gt, ge are defined generically on Bound<'py, T>
+    // in instance.rs.
 
     // -----------------------------------------------------------------------
-    // Comparison
+    // isinstance / contains / getitem
     // -----------------------------------------------------------------------
 
-    /// Python `==` comparison.
-    pub fn eq(&self, other: &Bound<'py, PyAny>) -> PyResult<bool> {
+    /// Check if this object is an instance of the given type.
+    /// Accepts any `Bound<'py, T>` as the type argument (usually PyType or PyAny).
+    pub fn is_instance<T>(&self, type_obj: &Bound<'py, T>) -> PyResult<bool> {
         let vm = self.py.vm;
-        from_vm_result(self.obj.rich_compare_bool(&other.obj, PyComparisonOp::Eq, vm))
+        from_vm_result(self.obj.is_instance(&type_obj.obj, vm))
     }
 
-    /// Python `!=` comparison.
-    pub fn ne(&self, other: &Bound<'py, PyAny>) -> PyResult<bool> {
-        let vm = self.py.vm;
-        from_vm_result(self.obj.rich_compare_bool(&other.obj, PyComparisonOp::Ne, vm))
+    /// Check if this object is an instance of a specific Rust pyclass type.
+    pub fn is_instance_of<T: rustpython_vm::PyPayload + rustpython_vm::class::StaticType>(&self) -> bool {
+        self.obj.downcast_ref::<T>().is_some()
     }
 
-    /// Python `<` comparison.
-    pub fn lt(&self, other: &Bound<'py, PyAny>) -> PyResult<bool> {
+    /// Check if this container contains the given value.
+    /// Equivalent to Python's `value in self`.
+    pub fn contains<V: Into<PyObjectRef>>(&self, value: V) -> PyResult<bool> {
         let vm = self.py.vm;
-        from_vm_result(self.obj.rich_compare_bool(&other.obj, PyComparisonOp::Lt, vm))
+        let value_obj: PyObjectRef = value.into();
+        from_vm_result(vm.call_method(&self.obj, "__contains__", (value_obj,)))
+            .and_then(|result| from_vm_result(result.try_to_bool(vm)))
     }
 
-    /// Python `<=` comparison.
-    pub fn le(&self, other: &Bound<'py, PyAny>) -> PyResult<bool> {
+    /// Get an item by index/key. Equivalent to Python's `self[key]`.
+    pub fn get_item<K: Into<PyObjectRef>>(&self, key: K) -> PyResult<Bound<'py, PyAny>> {
         let vm = self.py.vm;
-        from_vm_result(self.obj.rich_compare_bool(&other.obj, PyComparisonOp::Le, vm))
+        let key_obj: PyObjectRef = key.into();
+        let result = from_vm_result(self.obj.get_item(&*key_obj, vm))?;
+        Ok(Bound::from_object(self.py, result))
     }
 
-    /// Python `>` comparison.
-    pub fn gt(&self, other: &Bound<'py, PyAny>) -> PyResult<bool> {
+    /// Get an iterator over this object. Equivalent to Python's `iter(self)`.
+    pub fn try_iter(&self) -> PyResult<Bound<'py, crate::types::PyIterator>> {
         let vm = self.py.vm;
-        from_vm_result(self.obj.rich_compare_bool(&other.obj, PyComparisonOp::Gt, vm))
+        let iter_obj = from_vm_result(self.obj.get_iter(vm))?;
+        let obj_ref: PyObjectRef = iter_obj.into();
+        Ok(Bound::from_object(self.py, obj_ref))
     }
 
-    /// Python `>=` comparison.
-    pub fn ge(&self, other: &Bound<'py, PyAny>) -> PyResult<bool> {
-        let vm = self.py.vm;
-        from_vm_result(self.obj.rich_compare_bool(&other.obj, PyComparisonOp::Ge, vm))
+    /// Coerce the hash() return type to isize for pyo3 compatibility.
+    pub fn hash_isize(&self) -> PyResult<isize> {
+        self.hash().map(|h| h as isize)
     }
 }
