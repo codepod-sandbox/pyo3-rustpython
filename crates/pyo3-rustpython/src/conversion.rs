@@ -470,9 +470,11 @@ impl<'py, T: Into<PyObjectRef>> IntoPyArgs<'py> for (T,) {
     }
 }
 
-impl<'py> IntoPyArgs<'py> for (&crate::Py<PyAny>,) {
+impl<'py> IntoPyArgs<'py> for &Bound<'py, crate::types::PyTuple> {
     fn into_py_args(self, _py: Python<'py>) -> PyResult<Vec<PyObjectRef>> {
-        Ok(vec![self.0.obj.clone()])
+        let tuple = self.obj.downcast_ref::<PyTuple>()
+            .expect("Bound<PyTuple> must wrap a tuple");
+        Ok(tuple.as_slice().to_vec())
     }
 }
 

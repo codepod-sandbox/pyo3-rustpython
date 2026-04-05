@@ -159,7 +159,7 @@ impl HashTrieMapPy {
     fn __getitem__(&self, key: Key, py: Python) -> PyResult<Py<PyAny>> {
         match self.inner.get(&key) {
             Some(value) => Ok(value.clone_ref(py)),
-            None => Err(PyKeyError::new_err(key)),
+            None => Err(PyKeyError::new_err(format!("{:?}", key))),
         }
     }
 
@@ -270,7 +270,7 @@ impl HashTrieMapPy {
         Ok(hash_val as isize)
     }
 
-    fn __reduce__(&self, py: Python<'_>) -> PickledTypeWithVec<'_> {
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PickledTypeWithVec<'py> {
         (
             HashTrieMapPy::type_object(py),
             (self.inner
@@ -280,39 +280,10 @@ impl HashTrieMapPy {
         )
     }
 
-    #[classmethod]
-    fn convert(
-        _cls: &Bound<'_, PyType>,
-        value: Bound<'_, PyAny>,
-        py: Python,
-    ) -> PyResult<Py<PyAny>> {
-        if value.is_instance_of::<HashTrieMapPy>() {
-            Ok(value.unbind())
-        } else {
-            value.extract::<HashTrieMapPy>()?
-                .into_pyobject(py)
-                .map(BoundObject::into_any)
-                .map(BoundObject::unbind)
-        }
-    }
-
-    #[classmethod]
-    #[pyo3(signature = (keys, val=None))]
-    fn fromkeys(
-        _cls: &Bound<'_, PyType>,
-        keys: &Bound<'_, PyAny>,
-        val: Option<&Bound<'_, PyAny>>,
-        py: Python,
-    ) -> PyResult<HashTrieMapPy> {
-        let mut inner = HashTrieMap::new_sync();
-        let none = py.None().into_bound(py);
-        let value = val.unwrap_or(&none);
-        for each in keys.try_iter()? {
-            let key = each?.extract::<Key>()?;
-            inner.insert_mut(key, value.clone().unbind());
-        }
-        Ok(HashTrieMapPy { inner })
-    }
+    // TODO: classmethod `convert` and `fromkeys` commented out — requires
+    // RustPython classmethod support with Bound<PyType> first arg.
+    // #[classmethod] fn convert(...)
+    // #[classmethod] fn fromkeys(...)
 
     #[pyo3(signature = (key, default=None))]
     fn get(&self, key: Key, default: Option<Py<PyAny>>, py: Python) -> Option<Py<PyAny>> {
@@ -363,30 +334,14 @@ impl HashTrieMapPy {
             true => Ok(HashTrieMapPy {
                 inner: self.inner.remove(&key),
             }),
-            false => Err(PyKeyError::new_err(key)),
+            false => Err(PyKeyError::new_err(format!("{:?}", key))),
         }
     }
 
-    #[pyo3(signature = (*maps, **kwds))]
-    fn update(
-        &self,
-        maps: &Bound<'_, PyTuple>,
-        kwds: Option<&Bound<'_, PyDict>>,
-    ) -> PyResult<HashTrieMapPy> {
-        let mut inner = self.inner.clone();
-        for value in maps {
-            let map = value.extract::<HashTrieMapPy>()?;
-            for (k, v) in &map.inner {
-                inner.insert_mut(k.clone_ref(value.py()), v.clone_ref(value.py()));
-            }
-        }
-        if let Some(kwds) = kwds {
-            for (k, v) in kwds {
-                inner.insert_mut(k.extract::<Key>()?, v.extract()?);
-            }
-        }
-        Ok(HashTrieMapPy { inner })
-    }
+    // TODO: update() commented out - requires variadic *args/**kwds pattern
+    // that our pyo3-rustpython shim doesn't support yet.
+    // Original signature: #[pyo3(signature = (*maps, **kwds))]
+    // fn update(&self, maps: &Bound<'_, PyTuple>, kwds: Option<&Bound<'_, PyDict>>) -> PyResult<HashTrieMapPy>
 }
 
 #[pyclass(module = "rpds")]
@@ -537,11 +492,11 @@ impl KeysView {
     }
 
     fn __and__(&self, other: &Bound<'_, PyAny>) -> PyResult<HashTrieSetPy> {
-        KeysView::intersection(self, other)
+        self._pyo3_intersection(other)
     }
 
     fn __or__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<KeysView> {
-        KeysView::union(self, other, py)
+        self._pyo3_union(other, py)
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
@@ -706,7 +661,7 @@ impl ItemsView {
             match self.inner.get(&k.extract::<Key>()?) {
                 Some(value) => {
                     let pair = PyTuple::new(py, [k, value.bind(py).clone()])?;
-                    if !pair.eq(kv)? {
+                    if !pair.eq(&kv)? {
                         return Ok(false);
                     }
                 }
@@ -727,7 +682,7 @@ impl ItemsView {
             match self.inner.get(&k.extract::<Key>()?) {
                 Some(value) => {
                     let pair = PyTuple::new(py, [k, value.bind(py).clone()])?;
-                    if !pair.eq(kv)? {
+                    if !pair.eq(&kv)? {
                         return Ok(false);
                     }
                 }
@@ -738,23 +693,23 @@ impl ItemsView {
     }
 
     fn __and__(
-        self: PyRef<'_, Self>,
+        &self,
         other: &Bound<'_, PyAny>,
         py: Python,
     ) -> PyResult<HashTrieSetPy> {
-        ItemsView::intersection(self, other, py)
+        self._pyo3_intersection(other, py)
     }
 
     fn __or__(
-        self: PyRef<'_, Self>,
+        &self,
         other: &Bound<'_, PyAny>,
         py: Python,
     ) -> PyResult<HashTrieSetPy> {
-        ItemsView::union(self, other, py)
+        self._pyo3_union(other, py)
     }
 
     fn intersection(
-        self: PyRef<'_, Self>,
+        &self,
         other: &Bound<'_, PyAny>,
         py: Python,
     ) -> PyResult<HashTrieSetPy> {
@@ -765,7 +720,7 @@ impl ItemsView {
             let k = kv.get_item(0)?;
             if let Some(value) = self.inner.get(&k.extract::<Key>()?) {
                 let pair = PyTuple::new(py, [k, value.bind(py).clone()])?;
-                if pair.eq(kv)? {
+                if pair.eq(&kv)? {
                     inner.insert_mut(pair.as_any().extract::<Key>()?);
                 }
             }
@@ -774,7 +729,7 @@ impl ItemsView {
     }
 
     fn union(
-        self: PyRef<'_, Self>,
+        &self,
         other: &Bound<'_, PyAny>,
         py: Python,
     ) -> PyResult<HashTrieSetPy> {
@@ -811,14 +766,9 @@ impl<'py> FromPyObject<'py> for HashTrieSetPy {
 #[pymethods]
 impl HashTrieSetPy {
     #[new]
-    #[pyo3(signature = (value=None))]
-    fn init(value: Option<HashTrieSetPy>) -> Self {
-        if let Some(value) = value {
-            value
-        } else {
-            HashTrieSetPy {
-                inner: HashTrieSet::new_sync(),
-            }
+    fn init() -> Self {
+        HashTrieSetPy {
+            inner: HashTrieSet::new_sync(),
         }
     }
 
@@ -827,19 +777,19 @@ impl HashTrieSetPy {
     }
 
     fn __and__(&self, other: &Self, py: Python) -> Self {
-        self.intersection(other, py)
+        self._pyo3_intersection(other, py)
     }
 
     fn __or__(&self, other: &Self, py: Python) -> Self {
-        self.union(other, py)
+        self._pyo3_union(other, py)
     }
 
     fn __sub__(&self, other: &Self) -> Self {
-        self.difference(other)
+        self._pyo3_difference(other)
     }
 
     fn __xor__(&self, other: &Self, py: Python) -> Self {
-        self.symmetric_difference(other, py)
+        self._pyo3_symmetric_difference(other, py)
     }
 
     fn __iter__(&self) -> SetIterator {
@@ -948,7 +898,7 @@ impl HashTrieSetPy {
         Ok(true)
     }
 
-    fn __reduce__(&self, py: Python<'_>) -> (Bound<'_, PyType>, (Vec<Key>,)) {
+    fn __reduce__<'py>(&self, py: Python<'py>) -> (Bound<'py, PyType>, (Vec<Key>,)) {
         (
             HashTrieSetPy::type_object(py),
             (self.inner.iter().map(|e| e.clone()).collect(),),
@@ -977,7 +927,7 @@ impl HashTrieSetPy {
             true => Ok(HashTrieSetPy {
                 inner: self.inner.remove(&value),
             }),
-            false => Err(PyKeyError::new_err(value)),
+            false => Err(PyKeyError::new_err(format!("{:?}", value))),
         }
     }
 
@@ -1144,7 +1094,7 @@ impl ListPy {
                     .inner
                     .iter()
                     .zip(other.inner.iter())
-                    .map(|(e1, e2)| e1.bind(py).eq(e2))
+                    .map(|(e1, e2)| e1.bind(py).eq(&e2.bind(py)))
                     .all(|r| r.unwrap_or(false)))
             .into_pyobject(py)
             .map_err(Into::into)
@@ -1155,7 +1105,7 @@ impl ListPy {
                     .inner
                     .iter()
                     .zip(other.inner.iter())
-                    .map(|(e1, e2)| e1.bind(py).ne(e2))
+                    .map(|(e1, e2)| e1.bind(py).ne(&e2.bind(py)))
                     .any(|r| r.unwrap_or(true)))
             .into_pyobject(py)
             .map_err(Into::into)
@@ -1202,18 +1152,22 @@ impl ListPy {
         }
     }
 
-    fn __reduce__(&self, py: Python<'_>) -> (Bound<'_, PyType>, (Vec<Py<PyAny>>,)) {
+    fn __reduce__<'py>(&self, py: Python<'py>) -> (Bound<'py, PyType>, (Vec<Py<PyAny>>,)) {
         (
             ListPy::type_object(py),
             (self.inner.iter().map(|e| e.clone()).collect(),),
         )
     }
 
+    // TODO: #[getter] with PyResult<T> return not supported by pyo3-rustpython shim.
+    // Changed to return rustpython_vm::PyResult so it works directly with #[pygetset].
+    // Original: #[getter] fn first(&self) -> PyResult<&Py<PyAny>>
     #[getter]
-    fn first(&self) -> PyResult<&Py<PyAny>> {
+    fn first(&self, vm: &rustpython_vm::VirtualMachine) -> rustpython_vm::PyResult<Py<PyAny>> {
         self.inner
             .first()
-            .ok_or_else(|| PyIndexError::new_err("empty list has no first element"))
+            .cloned()
+            .ok_or_else(|| vm.new_index_error("empty list has no first element".to_string()))
     }
 
     #[getter]
@@ -1331,7 +1285,7 @@ impl StackPy {
                     .inner
                     .iter()
                     .zip(other.inner.iter())
-                    .map(|(e1, e2)| e1.bind(py).eq(e2))
+                    .map(|(e1, e2)| e1.bind(py).eq(&e2.bind(py)))
                     .all(|r| r.unwrap_or(false)))
             .into_pyobject(py)
             .map_err(Into::into)
@@ -1342,7 +1296,7 @@ impl StackPy {
                     .inner
                     .iter()
                     .zip(other.inner.iter())
-                    .map(|(e1, e2)| e1.bind(py).ne(e2))
+                    .map(|(e1, e2)| e1.bind(py).ne(&e2.bind(py)))
                     .any(|r| r.unwrap_or(true)))
             .into_pyobject(py)
             .map_err(Into::into)
@@ -1476,7 +1430,7 @@ impl QueuePy {
                 .inner
                 .iter()
                 .zip(other.inner.iter())
-                .map(|(e1, e2)| e1.bind(py).eq(e2))
+                .map(|(e1, e2)| e1.bind(py).eq(&e2.bind(py)))
                 .all(|r| r.unwrap_or(false))
     }
 
@@ -1511,7 +1465,7 @@ impl QueuePy {
                 .inner
                 .iter()
                 .zip(other.inner.iter())
-                .map(|(e1, e2)| e1.bind(py).ne(e2))
+                .map(|(e1, e2)| e1.bind(py).ne(&e2.bind(py)))
                 .any(|r| r.unwrap_or(true))
     }
 

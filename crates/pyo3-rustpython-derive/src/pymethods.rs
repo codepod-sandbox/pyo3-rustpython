@@ -344,6 +344,13 @@ fn has_pyo3_params(method: &ImplItemFn) -> bool {
             {
                 return true;
             }
+            // Check for `&Self` or `Self` type patterns — pyo3 supports these
+            // but RustPython's #[pymethod] does not (requires TryFromObject).
+            let ty = &pt.ty;
+            let ty_str = quote!(#ty).to_string().replace(' ', "");
+            if ty_str.contains("&Self") || ty_str == "Self" {
+                return true;
+            }
         }
     }
     false
@@ -421,6 +428,9 @@ fn generate_pyresult_wrapper(method: &ImplItemFn) -> TokenStream {
                     continue;
                 };
 
+                let ty = &pt.ty;
+                let raw_ty_str = quote!(#ty).to_string().replace(' ', "");
+
                 if ty_str.contains("Python") {
                     // Python<'_> param: inject from vm, not in wrapper
                     inner_call_args.push(quote! { __py });
@@ -437,6 +447,15 @@ fn generate_pyresult_wrapper(method: &ImplItemFn) -> TokenStream {
                     } else {
                         inner_call_args.push(quote! { #name });
                     }
+                } else if raw_ty_str.contains("&Self") {
+                    // &Self param: accept as &Self directly but use PyRef for extraction.
+                    // The wrapper receives a RustPython PyRef, then borrows it.
+                    let wrapper_name = format_ident!("__ref_{}", name);
+                    wrapper_params.push(quote! { #wrapper_name: ::rustpython_vm::PyRef<Self> });
+                    conversion_stmts.push(quote! {
+                        let #name: &Self = &*#wrapper_name;
+                    });
+                    inner_call_args.push(quote! { #name });
                 } else {
                     // Regular param: pass through as-is
                     wrapper_params.push(quote! { #arg });

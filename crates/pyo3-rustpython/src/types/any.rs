@@ -16,6 +16,76 @@ use crate::{
     types::{PyDict, PyString, PyTuple, PyType},
 };
 
+/// Trait for types that can be converted to a `PyObjectRef`.
+/// This is similar to `Into<PyObjectRef>` but we own the trait, allowing us
+/// to impl it for foreign types like integers and tuples.
+pub trait IntoPyObjectRef {
+    fn into_pyobject_ref(self, vm: &rustpython_vm::VirtualMachine) -> PyObjectRef;
+}
+
+// PyObjectRef itself
+impl IntoPyObjectRef for PyObjectRef {
+    fn into_pyobject_ref(self, _vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        self
+    }
+}
+
+// Py<T> -> PyObjectRef
+impl<T> IntoPyObjectRef for crate::instance::Py<T> {
+    fn into_pyobject_ref(self, _vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        self.obj
+    }
+}
+
+// &Py<T> -> PyObjectRef (clone)
+impl<T> IntoPyObjectRef for &crate::instance::Py<T> {
+    fn into_pyobject_ref(self, _vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        self.obj.clone()
+    }
+}
+
+// Bound<'_, T> -> PyObjectRef
+impl<T> IntoPyObjectRef for Bound<'_, T> {
+    fn into_pyobject_ref(self, _vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        self.obj
+    }
+}
+
+// &Bound<'_, T> -> PyObjectRef
+impl<T> IntoPyObjectRef for &Bound<'_, T> {
+    fn into_pyobject_ref(self, _vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        self.obj.clone()
+    }
+}
+
+// Integer types
+impl IntoPyObjectRef for i32 {
+    fn into_pyobject_ref(self, vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        vm.ctx.new_int(self).into()
+    }
+}
+
+impl IntoPyObjectRef for i64 {
+    fn into_pyobject_ref(self, vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        vm.ctx.new_int(self).into()
+    }
+}
+
+impl IntoPyObjectRef for usize {
+    fn into_pyobject_ref(self, vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        vm.ctx.new_int(self).into()
+    }
+}
+
+// Tuple of two PyObjectRef-convertible items -> Python tuple
+impl<A: Into<PyObjectRef>, B: Into<PyObjectRef>> IntoPyObjectRef for (A, B) {
+    fn into_pyobject_ref(self, vm: &rustpython_vm::VirtualMachine) -> PyObjectRef {
+        let a: PyObjectRef = self.0.into();
+        let b: PyObjectRef = self.1.into();
+        vm.ctx.new_tuple(vec![a, b]).into()
+    }
+}
+
 /// Universal object API on `Bound<'py, PyAny>`.
 ///
 /// Note: `extract` is defined in `conversion.rs` to avoid circular imports.
@@ -203,17 +273,17 @@ impl<'py> Bound<'py, PyAny> {
 
     /// Check if this container contains the given value.
     /// Equivalent to Python's `value in self`.
-    pub fn contains<V: Into<PyObjectRef>>(&self, value: V) -> PyResult<bool> {
+    pub fn contains<V: IntoPyObjectRef>(&self, value: V) -> PyResult<bool> {
         let vm = self.py.vm;
-        let value_obj: PyObjectRef = value.into();
+        let value_obj: PyObjectRef = value.into_pyobject_ref(vm);
         from_vm_result(vm.call_method(&self.obj, "__contains__", (value_obj,)))
             .and_then(|result| from_vm_result(result.try_to_bool(vm)))
     }
 
     /// Get an item by index/key. Equivalent to Python's `self[key]`.
-    pub fn get_item<K: Into<PyObjectRef>>(&self, key: K) -> PyResult<Bound<'py, PyAny>> {
+    pub fn get_item<K: IntoPyObjectRef>(&self, key: K) -> PyResult<Bound<'py, PyAny>> {
         let vm = self.py.vm;
-        let key_obj: PyObjectRef = key.into();
+        let key_obj: PyObjectRef = key.into_pyobject_ref(vm);
         let result = from_vm_result(self.obj.get_item(&*key_obj, vm))?;
         Ok(Bound::from_object(self.py, result))
     }

@@ -108,6 +108,13 @@ impl<T> From<Py<T>> for PyObjectRef {
     }
 }
 
+/// Conversion from &Py to PyObjectRef (via clone).
+impl<T> From<&Py<T>> for PyObjectRef {
+    fn from(py: &Py<T>) -> Self {
+        py.obj.clone()
+    }
+}
+
 /// Implement TryFromObject for Py<PyAny> so it works with #[pymethod] params.
 impl rustpython_vm::convert::TryFromObject for Py<crate::types::PyAny> {
     fn try_from_object(
@@ -198,12 +205,11 @@ impl<'py, T> Bound<'py, T> {
         Ok(Bound::from_object(self.py, result))
     }
 
-    /// Call a method with one tuple arg. Works on any `Bound<'py, T>`.
-    pub fn call_method1(&self, name: &str, args: &Bound<'py, crate::types::PyTuple>) -> crate::PyResult<Bound<'py, crate::types::PyAny>> {
+    /// Call a method with positional arguments. Works on any `Bound<'py, T>`.
+    /// Accepts either a `&Bound<PyTuple>` or a tuple of args implementing `IntoPyArgs`.
+    pub fn call_method1(&self, name: &str, args: impl crate::conversion::IntoPyArgs<'py>) -> crate::PyResult<Bound<'py, crate::types::PyAny>> {
         let vm = self.py.vm;
-        let tuple = args.obj.downcast_ref::<rustpython_vm::builtins::PyTuple>()
-            .expect("call_method1 args must be a tuple");
-        let positional: Vec<PyObjectRef> = tuple.as_slice().to_vec();
+        let positional = args.into_py_args(self.py)?;
         let func_args: rustpython_vm::function::FuncArgs = positional.into();
         let interned = vm.ctx.intern_str(name);
         let method = crate::err::from_vm_result(self.obj.get_attr(interned, vm))?;
@@ -270,6 +276,26 @@ impl<'py, T> Bound<'py, T> {
 impl<'py, T> Clone for Bound<'py, T> {
     fn clone(&self) -> Self {
         Bound { py: self.py, obj: self.obj.clone(), _marker: PhantomData }
+    }
+}
+
+impl<T> std::fmt::Debug for Bound<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Bound({:?})", self.obj)
+    }
+}
+
+/// Conversion from Bound<'_, T> to PyObjectRef.
+impl<T> From<Bound<'_, T>> for PyObjectRef {
+    fn from(bound: Bound<'_, T>) -> Self {
+        bound.obj
+    }
+}
+
+/// Conversion from &Bound<'_, T> to PyObjectRef (via clone).
+impl<T> From<&Bound<'_, T>> for PyObjectRef {
+    fn from(bound: &Bound<'_, T>) -> Self {
+        bound.obj.clone()
     }
 }
 
