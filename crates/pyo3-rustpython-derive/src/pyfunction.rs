@@ -99,6 +99,10 @@ fn map_type(ty_str: &str, name: &syn::Ident) -> Result<(TokenStream, TokenStream
             quote! { ::rustpython_vm::function::ArgIntoBool },
             quote! { #name.into() },
         )),
+        "Vec<u8>" => Ok((
+            quote! { ::rustpython_vm::builtins::PyBytesRef },
+            quote! { #name.as_bytes().to_vec() },
+        )),
         other if other.contains("Bound") => Ok((
             quote! { ::rustpython_vm::PyObjectRef },
             quote! {
