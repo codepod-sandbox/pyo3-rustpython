@@ -6,7 +6,6 @@ mod extension {
 
 fn main() {
     let builder = InterpreterBuilder::new();
-    // rpds-py's #[pymodule] function is named rpds_py
     let module_def = extension::rpds_py_module_def(&builder.ctx);
     let interp = builder.add_native_module(module_def).build();
 
@@ -14,12 +13,29 @@ fn main() {
         vm.run_block_expr(
             vm.new_scope_with_builtins(),
             r#"
-from rpds import HashTrieMap, HashTrieSet, List
+from rpds_py import HashTrieMapPy as HashTrieMap
 
+# Create an empty map
 m = HashTrieMap()
-m2 = m.insert("key", "value")
-print(f"map: {m2}")
-print("rpds basic test passed!")
+print(f"created: {type(m).__name__}")
+
+# insert and get
+m2 = m.insert("hello", "world")
+result = m2.get("hello")
+assert result == "world", f"expected 'world', got {result}"
+print(f"insert+get: hello -> {result}")
+
+# Multiple inserts
+m3 = m2.insert("foo", "bar")
+result2 = m3.get("foo")
+assert result2 == "bar"
+print(f"second insert: foo -> {result2}")
+
+# Original map unchanged (persistent!)
+assert m2.get("foo") is None, "original map should not have 'foo'"
+print("persistence verified")
+
+print("All rpds tests passed!")
 "#,
         )
         .map(|_| ())

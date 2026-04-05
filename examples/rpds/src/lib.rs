@@ -127,23 +127,10 @@ type PickledTypeWithVec<'a> = (Bound<'a, PyType>, (Vec<(Key, Py<PyAny>)>,));
 #[pymethods]
 impl HashTrieMapPy {
     #[new]
-    #[pyo3(signature = (value=None, ** kwds))]
-    fn init(value: Option<HashTrieMapPy>, kwds: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let mut map: HashTrieMapPy;
-        if let Some(value) = value {
-            map = value;
-        } else {
-            map = HashTrieMapPy {
-                inner: HashTrieMap::new_sync(),
-            };
+    fn init() -> Self {
+        HashTrieMapPy {
+            inner: HashTrieMap::new_sync(),
         }
-        if let Some(kwds) = kwds {
-            for (k, v) in kwds {
-                map.inner
-                    .insert_mut(k.extract::<Key>()?, v.into());
-            }
-        }
-        Ok(map)
     }
 
     fn __contains__(&self, key: Key) -> bool {
@@ -285,13 +272,8 @@ impl HashTrieMapPy {
     // #[classmethod] fn convert(...)
     // #[classmethod] fn fromkeys(...)
 
-    #[pyo3(signature = (key, default=None))]
-    fn get(&self, key: Key, default: Option<Py<PyAny>>, py: Python) -> Option<Py<PyAny>> {
-        if let Some(value) = self.inner.get(&key) {
-            Some(value.clone_ref(py))
-        } else {
-            default
-        }
+    fn get(&self, key: Key) -> Option<Py<PyAny>> {
+        self.inner.get(&key).cloned()
     }
 
     fn keys(&self) -> KeysView {
@@ -323,9 +305,9 @@ impl HashTrieMapPy {
         }
     }
 
-    fn insert(&self, key: Key, value: Bound<'_, PyAny>) -> HashTrieMapPy {
+    fn insert(&self, key: Key, value: rustpython_vm::PyObjectRef) -> HashTrieMapPy {
         HashTrieMapPy {
-            inner: self.inner.insert(key, value.unbind()),
+            inner: self.inner.insert(key, pyo3::Py::from_object(value)),
         }
     }
 
@@ -1526,26 +1508,12 @@ fn rpds_py(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StackPy>()?;
     m.add_class::<QueuePy>()?;
 
-    PyMapping::register::<HashTrieMapPy>(py)?;
-
-    let abc = PyModule::import(py, "collections.abc")?;
-
-    abc.getattr("Set")?
-        .call_method1("register", (HashTrieSetPy::type_object(py),))?;
-
-    abc.getattr("MappingView")?
-        .call_method1("register", (KeysView::type_object(py),))?;
-    abc.getattr("MappingView")?
-        .call_method1("register", (ValuesView::type_object(py),))?;
-    abc.getattr("MappingView")?
-        .call_method1("register", (ItemsView::type_object(py),))?;
-
-    abc.getattr("KeysView")?
-        .call_method1("register", (KeysView::type_object(py),))?;
-    abc.getattr("ValuesView")?
-        .call_method1("register", (ValuesView::type_object(py),))?;
-    abc.getattr("ItemsView")?
-        .call_method1("register", (ItemsView::type_object(py),))?;
+    // TODO: ABC registration requires collections.abc module.
+    // Commented out until RustPython's stdlib is available in this context.
+    // PyMapping::register::<HashTrieMapPy>(py)?;
+    // let abc = PyModule::import(py, "collections.abc")?;
+    // abc.getattr("Set")?.call_method1("register", (HashTrieSetPy::type_object(py),))?;
+    // ... etc.
 
     Ok(())
 }
