@@ -1,15 +1,23 @@
-use rustpython_vm::{
-    builtins::PyBytes as RpBytes,
-    PyObjectRef,
-};
+use rustpython_vm::{builtins::PyBytes as RpBytes, PyObjectRef};
 
-use crate::{
-    instance::Bound,
-    python::Python,
-};
+use crate::{instance::Bound, python::Python};
 
 /// Marker type for a Python `bytes` object.
 pub struct PyBytes;
+
+impl PyBytes {
+    /// Create a new Python `bytes` object of `len` bytes, initialized by a
+    /// callback. This mirrors pyo3's `PyBytes::new_with`.
+    pub fn new_with<'py>(
+        py: Python<'py>,
+        len: usize,
+        init: impl FnOnce(&mut [u8]) -> crate::PyResult<()>,
+    ) -> crate::PyResult<Bound<'py, PyBytes>> {
+        let mut data = vec![0u8; len];
+        init(&mut data)?;
+        Ok(<Bound<'py, PyBytes>>::new(py, &data))
+    }
+}
 
 impl<'py> Bound<'py, PyBytes> {
     /// Create a new Python `bytes` object from a byte slice.

@@ -1,10 +1,8 @@
-use rustpython_vm::PyObjectRef;
-
 use crate::{
     err::{from_vm_result, PyResult},
     instance::Bound,
     python::Python,
-    types::{PyAny, PyList},
+    types::PyList,
 };
 
 /// Marker type for a Python mapping object.
@@ -16,8 +14,8 @@ impl<'py> Bound<'py, PyMapping> {
         let vm = self.py.vm;
         let result = from_vm_result(vm.call_method(&self.obj, "items", ()))?;
         // Convert to list
-        let list = from_vm_result(vm.call_method(&result, "__iter__", ()))?;
-        // Actually, just return the items view as a list-like object
+        let _list = from_vm_result(vm.call_method(&result, "__iter__", ()))?;
+
         Ok(Bound::from_object(self.py, result))
     }
 }

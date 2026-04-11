@@ -1,4 +1,4 @@
-use rustpython_vm::InterpreterBuilder;
+use pyo3::interp::InterpreterBuilder;
 
 mod extension {
     include!("lib.rs");

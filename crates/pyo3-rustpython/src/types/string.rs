@@ -1,16 +1,17 @@
-use rustpython_vm::{
-    builtins::PyStr as RpStr,
-    PyObjectRef,
-};
+use rustpython_vm::{builtins::PyStr as RpStr, PyObjectRef};
 
-use crate::{
-    err::PyResult,
-    instance::Bound,
-    python::Python,
-};
+use crate::{err::PyResult, instance::Bound, python::Python};
 
 /// Marker type for a Python `str` object.
 pub struct PyString;
+
+impl PyString {
+    /// Create a new Python string from a Rust `&str`.
+    pub fn new<'py>(py: Python<'py>, s: &str) -> Bound<'py, PyString> {
+        let obj: PyObjectRef = py.vm.ctx.new_str(s).into();
+        Bound::from_object(py, obj)
+    }
+}
 
 impl<'py> Bound<'py, PyString> {
     /// Create a new Python string from a Rust `&str`.

@@ -4,7 +4,7 @@ mod dict;
 mod iterator;
 mod list;
 mod mapping;
-mod module;
+pub mod module;
 mod none;
 mod primitives;
 mod set;
@@ -23,5 +23,13 @@ pub use none::PyNone;
 pub use primitives::{PyBool, PyFloat, PyInt, PyLong};
 pub use set::{PyFrozenSet, PySet};
 pub use string::PyString;
-pub use tuple::PyTuple;
+pub use tuple::{PyTuple, PyTupleMethods};
 pub use typeobj::PyType;
+
+pub trait PyAnyMethods {}
+impl PyAnyMethods for Bound<'_, PyAny> {}
+
+pub trait PyTypeMethods {}
+impl PyTypeMethods for Bound<'_, PyType> {}
+
+use crate::instance::Bound;

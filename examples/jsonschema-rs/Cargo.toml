@@ -1,0 +1,15 @@
+[package]
+name = "jsonschema-rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jsonschema_rs"
+
+[dependencies]
+jsonschema = { path = "../jsonschema-dep", features = ["arbitrary-precision"] }
+pyo3 = { package = "pyo3-rustpython", path = "../../crates/pyo3-rustpython" }
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893", default-features = false, features = ["stdlib", "freeze-stdlib", "encodings"] }
+rustpython-vm = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }

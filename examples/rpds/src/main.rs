@@ -1,4 +1,4 @@
-use rustpython_vm::InterpreterBuilder;
+use pyo3::interp::InterpreterBuilder;
 
 mod extension {
     include!("lib.rs");
@@ -13,7 +13,7 @@ fn main() {
         vm.run_block_expr(
             vm.new_scope_with_builtins(),
             r#"
-from rpds_py import HashTrieMapPy as HashTrieMap
+from rpds_py import HashTrieMap
 
 # Create an empty map
 m = HashTrieMap()

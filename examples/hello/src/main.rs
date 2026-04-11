@@ -1,7 +1,7 @@
 // Drives a RustPython interpreter with the `hello` module registered,
 // then runs a quick smoke test from Python.
 
-use rustpython_vm::InterpreterBuilder;
+use pyo3::interp::InterpreterBuilder;
 
 mod extension {
     include!("lib.rs");

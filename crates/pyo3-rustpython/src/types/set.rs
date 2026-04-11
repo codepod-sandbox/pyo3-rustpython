@@ -1,8 +1,4 @@
-use rustpython_vm::{
-    builtins::PySet as RpSet,
-    convert::ToPyObject,
-    PyObjectRef, PyPayload,
-};
+use rustpython_vm::{builtins::PySet as RpSet, convert::ToPyObject, PyObjectRef, PyPayload};
 
 use crate::{
     err::{from_vm_result, PyResult},
@@ -28,7 +24,10 @@ impl<'py> Bound<'py, PySet> {
     pub fn add(&self, value: impl ToPyObject) -> PyResult<()> {
         let vm = self.py.vm;
         let val_obj = value.to_pyobject(vm);
-        let set = self.obj.downcast_ref::<RpSet>().expect("Bound<PySet> must wrap a set");
+        let set = self
+            .obj
+            .downcast_ref::<RpSet>()
+            .expect("Bound<PySet> must wrap a set");
         from_vm_result(set.add(val_obj, vm))
     }
 

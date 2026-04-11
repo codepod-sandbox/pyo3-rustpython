@@ -1,4 +1,4 @@
-use rustpython_vm::InterpreterBuilder;
+use pyo3::interp::InterpreterBuilder;
 
 mod py_lossless_float;
 mod py_string_cache;

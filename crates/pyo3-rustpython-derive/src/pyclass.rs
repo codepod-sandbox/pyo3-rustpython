@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Fields, ItemStruct, Result};
+use syn::{Fields, ItemEnum, ItemStruct, Result};
 
 /// Information about a field annotated with `#[pyo3(get)]` and/or `#[pyo3(set)]`.
 struct FieldAccessor {
@@ -8,6 +8,72 @@ struct FieldAccessor {
     ty: syn::Type,
     get: bool,
     set: bool,
+}
+
+/// Options parsed from `#[pyclass(name = "...", module = "...", frozen, set, get_all, from_py_object, subclass, extends=...)]`.
+struct PyClassOptions {
+    name: Option<String>,
+    module: Option<String>,
+    frozen: bool,
+    set: bool,
+    get_all: bool,
+    from_py_object: bool,
+    subclass: bool,
+    extends: Option<syn::Path>,
+}
+
+fn parse_pyclass_options(attr: &TokenStream) -> PyClassOptions {
+    let mut opts = PyClassOptions {
+        name: None,
+        module: None,
+        frozen: false,
+        set: false,
+        get_all: false,
+        from_py_object: false,
+        subclass: false,
+        extends: None,
+    };
+    if attr.is_empty() {
+        return opts;
+    }
+    let s = attr.to_string();
+    for part in s.split(',') {
+        let part = part.trim();
+        if part == "frozen" {
+            opts.frozen = true;
+        } else if part == "set" {
+            opts.set = true;
+        } else if part == "get_all" {
+            opts.get_all = true;
+        } else if part == "from_py_object" {
+            opts.from_py_object = true;
+        } else if part == "subclass" {
+            opts.subclass = true;
+        } else if let Some(rest) = part.strip_prefix("name") {
+            if let Some(val) = extract_string_value(rest) {
+                opts.name = Some(val);
+            }
+        } else if let Some(rest) = part.strip_prefix("module") {
+            if let Some(val) = extract_string_value(rest) {
+                opts.module = Some(val);
+            }
+        } else if let Some(rest) = part.strip_prefix("extends") {
+            let val = rest.trim().trim_start_matches('=').trim();
+            if let Ok(path) = syn::parse_str::<syn::Path>(val) {
+                opts.extends = Some(path);
+            }
+        }
+    }
+    opts
+}
+
+fn extract_string_value(s: &str) -> Option<String> {
+    let s = s.trim();
+    let s = s.strip_prefix('=')?;
+    let s = s.trim();
+    let s = s.strip_prefix('"')?;
+    let s = s.strip_suffix('"')?;
+    Some(s.to_string())
 }
 
 /// Expand `#[pyclass]` on a struct.
@@ -18,17 +84,16 @@ struct FieldAccessor {
 /// 2. A `Debug` derive if not already present.
 /// 3. An impl of `pyo3::Pyo3Accessors` that registers getters/setters for
 ///    fields annotated with `#[pyo3(get)]` / `#[pyo3(set)]`.
-pub fn expand(_attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
+pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
+    let options = parse_pyclass_options(&attr);
+
     let struct_name = &input.ident;
-    let struct_name_str = struct_name.to_string();
+    let struct_name_str = options.name.unwrap_or_else(|| struct_name.to_string());
 
-    // Collect field accessor info before stripping attributes.
-    let accessors = collect_accessors(&input.fields)?;
+    let accessors = collect_accessors(&input.fields, options.get_all)?;
 
-    // Strip #[pyo3(...)] attributes from fields.
     strip_pyo3_attrs(&mut input.fields);
 
-    // Check if Debug is already derived.
     let has_debug = input.attrs.iter().any(|attr| {
         if attr.path().is_ident("derive") {
             attr.parse_args_with(
@@ -36,8 +101,7 @@ pub fn expand(_attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> 
             )
             .map(|paths| {
                 paths.iter().any(|p| {
-                    p.is_ident("Debug")
-                        || p.segments.last().map_or(false, |s| s.ident == "Debug")
+                    p.is_ident("Debug") || p.segments.last().map_or(false, |s| s.ident == "Debug")
                 })
             })
             .unwrap_or(false)
@@ -46,27 +110,99 @@ pub fn expand(_attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> 
         }
     });
 
-    let debug_derive = if has_debug {
+    let debug_impl = if has_debug {
         quote! {}
     } else {
-        quote! { #[derive(Debug)] }
+        quote! {
+            impl ::core::fmt::Debug for #struct_name {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct(#struct_name_str).finish_non_exhaustive()
+                }
+            }
+        }
     };
 
-    // Generate the Pyo3Accessors implementation.
     let accessor_impl = generate_accessor_impl(struct_name, &accessors);
 
-    // Emit the struct with rustpython attributes.
+    let from_py_object_impl = if options.from_py_object {
+        quote! {
+            impl<'py> ::pyo3::FromPyObject<'py> for #struct_name {
+                fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
+                    let ref_val: &#struct_name = <&#struct_name as ::pyo3::FromPyObject<'py>>::extract_bound(ob)?;
+                    Ok(ref_val.clone())
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let base_init = if let Some(ref base_path) = options.extends {
+        quote! {
+            {
+                eprintln!("[pyclass] base_init for {} extends {:?}", #struct_name_str, stringify!(#base_path));
+                let base_type = <#base_path as ::rustpython_vm::PyPayload>::class(ctx);
+                let child_type = <Self as ::rustpython_vm::class::StaticType>::static_type();
+                eprintln!("[pyclass] base_type name={}, child_type name={}", base_type.name(), child_type.name());
+                *child_type.bases.write() = vec![base_type.to_owned()];
+                let base_mro: Vec<_> = base_type.mro.read().iter().cloned().collect();
+                eprintln!("[pyclass] base_mro len={}", base_mro.len());
+                let new_mro: Vec<_> = ::std::iter::once(child_type.to_owned())
+                    .chain(base_mro)
+                    .collect();
+                eprintln!("[pyclass] new_mro len={}", new_mro.len());
+                *child_type.mro.write() = new_mro;
+                eprintln!("[pyclass] after write, mro={:?}", child_type.mro.read().iter().map(|c| c.name().to_string()).collect::<Vec<_>>());
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #[::rustpython_vm::pyclass(module = false, name = #struct_name_str)]
-        #[derive(::rustpython_vm::PyPayload)]
-        #debug_derive
         #input
+
+        #debug_impl
+
+        impl ::rustpython_vm::PyPayload for #struct_name {
+            #[inline]
+            fn class(ctx: &::rustpython_vm::Context) -> &'static ::rustpython_vm::Py<::rustpython_vm::builtins::PyType> {
+                let already_init = <Self as ::rustpython_vm::class::StaticType>::static_cell().get().is_some();
+                <Self as ::rustpython_vm::class::PyClassImpl>::make_class(ctx);
+                let typ = <Self as ::rustpython_vm::class::StaticType>::static_type();
+                if !already_init {
+                    #base_init
+                    ::pyo3::slots::fixup_dunder_slots(typ, ctx);
+                }
+                typ
+            }
+        }
+
+        impl<'py> ::pyo3::IntoPyObject<'py> for #struct_name {
+            type Target = ::pyo3::types::PyAny;
+            type Error = ::pyo3::PyErr;
+
+            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> Result<::pyo3::Bound<'py, Self::Target>, Self::Error> {
+                let obj = ::rustpython_vm::convert::ToPyObject::to_pyobject(self, py.vm());
+                Ok(::pyo3::Bound::from_object(py, obj))
+            }
+        }
+
+        impl<'py> ::pyo3::FromPyObject<'py> for &'py #struct_name {
+            fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
+                ob.downcast_payload::<#struct_name>()
+                    .ok_or_else(|| ::pyo3::PyErr::new_type_error(ob.py(), "type mismatch"))
+            }
+        }
+
+        #from_py_object_impl
 
         #accessor_impl
     })
 }
 
-fn collect_accessors(fields: &Fields) -> Result<Vec<FieldAccessor>> {
+fn collect_accessors(fields: &Fields, get_all: bool) -> Result<Vec<FieldAccessor>> {
     let mut accessors = Vec::new();
 
     let named = match fields {
@@ -80,7 +216,7 @@ fn collect_accessors(fields: &Fields) -> Result<Vec<FieldAccessor>> {
             None => continue,
         };
 
-        let mut get = false;
+        let mut get = get_all;
         let mut set = false;
 
         for attr in &field.attrs {
@@ -122,10 +258,7 @@ fn strip_pyo3_attrs(fields: &mut Fields) {
 }
 
 /// Generate the `Pyo3Accessors` trait implementation.
-fn generate_accessor_impl(
-    struct_name: &syn::Ident,
-    accessors: &[FieldAccessor],
-) -> TokenStream {
+fn generate_accessor_impl(struct_name: &syn::Ident, accessors: &[FieldAccessor]) -> TokenStream {
     if accessors.is_empty() {
         return quote! {
             impl ::pyo3::Pyo3Accessors for #struct_name {
@@ -205,6 +338,100 @@ fn generate_accessor_impl(
                 use ::rustpython_vm::AsObject;
                 #(#registrations)*
             }
+        }
+    }
+}
+
+pub fn expand_enum(attr: TokenStream, mut input: ItemEnum) -> Result<TokenStream> {
+    let options = parse_pyclass_options(&attr);
+
+    let enum_name_str = options.name.unwrap_or_else(|| input.ident.to_string());
+
+    strip_pyo3_attrs_enum(&mut input);
+
+    let enum_name = &input.ident;
+
+    let has_debug = input.attrs.iter().any(|attr| {
+        if attr.path().is_ident("derive") {
+            attr.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .map(|paths| {
+                paths.iter().any(|p| {
+                    p.is_ident("Debug") || p.segments.last().map_or(false, |s| s.ident == "Debug")
+                })
+            })
+            .unwrap_or(false)
+        } else {
+            false
+        }
+    });
+
+    let debug_impl = if has_debug {
+        quote! {}
+    } else {
+        quote! {
+            impl ::core::fmt::Debug for #enum_name {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    f.debug_struct(#enum_name_str).finish_non_exhaustive()
+                }
+            }
+        }
+    };
+
+    Ok(quote! {
+        #[::rustpython_vm::pyclass(module = false, name = #enum_name_str)]
+        #input
+
+        #debug_impl
+
+        impl ::rustpython_vm::PyPayload for #enum_name {
+            #[inline]
+            fn class(ctx: &::rustpython_vm::Context) -> &'static ::rustpython_vm::Py<::rustpython_vm::builtins::PyType> {
+                let already_init = <Self as ::rustpython_vm::class::StaticType>::static_cell().get().is_some();
+                <Self as ::rustpython_vm::class::PyClassImpl>::make_class(ctx);
+                let typ = <Self as ::rustpython_vm::class::StaticType>::static_type();
+                if !already_init {
+                    ::pyo3::slots::fixup_dunder_slots(typ, ctx);
+                }
+                typ
+            }
+        }
+
+        impl<'py> ::pyo3::IntoPyObject<'py> for #enum_name {
+            type Target = ::pyo3::types::PyAny;
+            type Error = ::pyo3::PyErr;
+
+            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> Result<::pyo3::Bound<'py, Self::Target>, Self::Error> {
+                let obj = ::rustpython_vm::convert::ToPyObject::to_pyobject(self, py.vm());
+                Ok(::pyo3::Bound::from_object(py, obj))
+            }
+        }
+
+        impl ::pyo3::Pyo3Accessors for #enum_name {
+            fn __pyo3_register_accessors(
+                _ctx: &::rustpython_vm::Context,
+                _class: &'static ::rustpython_vm::Py<::rustpython_vm::builtins::PyType>,
+            ) {}
+        }
+    })
+}
+
+fn strip_pyo3_attrs_enum(input: &mut ItemEnum) {
+    for variant in &mut input.variants {
+        variant.attrs.retain(|attr| !attr.path().is_ident("pyo3"));
+        match &mut variant.fields {
+            Fields::Named(named) => {
+                for field in &mut named.named {
+                    field.attrs.retain(|attr| !attr.path().is_ident("pyo3"));
+                }
+            }
+            Fields::Unnamed(unnamed) => {
+                for field in &mut unnamed.unnamed {
+                    field.attrs.retain(|attr| !attr.path().is_ident("pyo3"));
+                }
+            }
+            Fields::Unit => {}
         }
     }
 }

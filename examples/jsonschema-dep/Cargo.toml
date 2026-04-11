@@ -1,0 +1,34 @@
+[package]
+name = "jsonschema"
+version = "0.45.1"
+edition = "2021"
+
+[features]
+default = ["resolve-file"]
+resolve-http = []
+resolve-file = []
+resolve-async = []
+arbitrary-precision = ["serde_json/arbitrary_precision", "dep:num-bigint"]
+tls-aws-lc-rs = []
+tls-ring = []
+
+[dependencies]
+ahash = { version = "0.8", features = ["serde"] }
+bytecount = { version = "0.6", features = ["runtime-dispatch-simd"] }
+data-encoding = "2.9"
+email_address = "0.2.9"
+fancy-regex = "0.17"
+fraction = { version = "0.15", default-features = false, features = ["with-bigint"] }
+idna = "1.0.2"
+itoa = "1"
+num-bigint = { version = "0.4", optional = true }
+num-cmp = "0.1"
+num-traits = "0.2.19"
+percent-encoding = "2.3"
+referencing = { version = "0.45.1", path = "../jsonschema-referencing-dep" }
+regex = "1.11.1"
+regex-syntax = "0.8.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+unicode-general-category = "1.1"
+uuid-simd = { version = "0.8", default-features = false, features = ["std", "detect"] }

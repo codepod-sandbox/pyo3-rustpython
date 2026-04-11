@@ -5,8 +5,23 @@ use syn::{ItemFn, Result};
 /// Parse the module name from either the attribute args or a `#[pyo3(name = "...")]`
 /// attribute on the function.
 fn parse_module_name(attr: &TokenStream, input: &ItemFn) -> Option<String> {
-    // First check the macro attribute itself: #[pymodule] or #[pymodule(name = "...")]
-    // (currently unused in pyo3 but just in case)
+    // First check the macro attribute itself: #[pymodule(name = "...", ...)]
+    // Options like `gil_used` are parsed and ignored.
+    {
+        let s = attr.to_string();
+        for part in s.split(',') {
+            let part = part.trim();
+            if let Some(rest) = part.strip_prefix("name") {
+                let rest = rest.trim();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    let rest = rest.trim().trim_matches('"');
+                    if !rest.is_empty() {
+                        return Some(rest.to_string());
+                    }
+                }
+            }
+        }
+    }
 
     // Then check for a sibling #[pyo3(name = "...")] attribute on the function.
     for a in &input.attrs {
@@ -35,8 +50,9 @@ pub fn expand(attr: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
     let fn_name = &input.sig.ident;
     let fn_name_str = fn_name.to_string();
 
-    // Check for a #[pyo3(name = "...")] sibling attribute on the function,
-    // or a `name = "..."` in the macro attribute itself.
+    // Parse and ignore `gil_used = ...` and other options from the attribute.
+    // e.g. #[pymodule(gil_used = false)]
+    // We only care about `name = "..."` if present.
     let module_name = parse_module_name(&attr, &input).unwrap_or_else(|| fn_name_str.clone());
 
     // Generated symbol names

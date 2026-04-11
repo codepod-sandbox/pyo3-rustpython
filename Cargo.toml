@@ -7,9 +7,14 @@ members = [
     "examples/phase2-test",
     "examples/rpds",
     "examples/jiter",
+    "examples/blake3",
+    "examples/jsonschema-rs",
+    "examples/jsonschema-dep",
+    "examples/jsonschema-referencing-dep",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 rustpython-vm = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
 rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }

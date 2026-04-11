@@ -1,14 +1,11 @@
-use rustpython_vm::{
-    builtins::PyTuple as RpTuple,
-    PyObjectRef,
-};
+use rustpython_vm::{builtins::PyTuple as RpTuple, PyObjectRef};
 
-use crate::{
-    err::PyResult,
-    instance::Bound,
-    python::Python,
-    types::PyAny,
-};
+use crate::{err::PyResult, instance::Bound, python::Python, types::PyAny};
+
+/// Marker trait for PyTuple methods. This is a compatibility shim for
+/// `pyo3::types::PyTupleMethods`.
+pub trait PyTupleMethods<'py> {}
+impl<'py> PyTupleMethods<'py> for Bound<'py, PyTuple> {}
 
 /// Marker type for a Python `tuple` object.
 pub struct PyTuple;
@@ -46,7 +43,10 @@ impl<'py> Bound<'py, PyTuple> {
     /// Get the item at the given index.
     pub fn get_item(&self, index: usize) -> PyResult<Bound<'py, PyAny>> {
         let vm = self.py.vm;
-        let tuple = self.obj.downcast_ref::<RpTuple>().expect("Bound<PyTuple> must wrap a tuple");
+        let tuple = self
+            .obj
+            .downcast_ref::<RpTuple>()
+            .expect("Bound<PyTuple> must wrap a tuple");
         let elements = tuple.as_slice();
         if index < elements.len() {
             Ok(Bound::from_object(self.py, elements[index].clone()))
@@ -59,7 +59,10 @@ impl<'py> Bound<'py, PyTuple> {
 
     /// Return the number of items in the tuple.
     pub fn len(&self) -> usize {
-        let tuple = self.obj.downcast_ref::<RpTuple>().expect("Bound<PyTuple> must wrap a tuple");
+        let tuple = self
+            .obj
+            .downcast_ref::<RpTuple>()
+            .expect("Bound<PyTuple> must wrap a tuple");
         tuple.as_slice().len()
     }
 

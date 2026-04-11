@@ -1,10 +1,6 @@
 use rustpython_vm::protocol::{PyIter, PyIterReturn};
 
-use crate::{
-    err::PyResult,
-    instance::Bound,
-    types::PyAny,
-};
+use crate::{err::PyResult, instance::Bound, types::PyAny};
 
 /// Marker type for a Python iterator object.
 pub struct PyIterator;

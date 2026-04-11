@@ -9,22 +9,46 @@ use crate::python::Python;
 /// Trait for exception types that can be used with `PyErr::new::<T, _>()`.
 pub trait PyExceptionType {
     /// Get the exception type object from the VM context.
-    fn type_object_raw(py: Python<'_>) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType>;
+    fn type_object_raw(
+        py: Python<'_>,
+    ) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType>;
 
-    /// Create a new PyErr with a message.
+    /// Create a new PyErr with a message or Python object as the argument.
     ///
     /// Requires being inside a RustPython interpreter context
     /// (the thread-local VM must be set). In practice, exception
     /// creation always happens during Python execution.
-    fn new_err(msg: impl Into<String>) -> PyErr {
+    fn new_err<A: ExcArg>(arg: A) -> PyErr {
         Python::with_gil(|py| {
             let exc_type = Self::type_object_raw(py);
             let vm = py.vm;
-            let msg_obj = vm.ctx.new_str(msg.into());
-            match vm.invoke_exception(exc_type.to_owned(), vec![msg_obj.into()]) {
+            let arg_obj = arg.into_exc_arg(py);
+            match vm.invoke_exception(exc_type.to_owned(), vec![arg_obj]) {
                 Ok(exc) => PyErr::from_vm_err(exc),
                 Err(exc) => PyErr::from_vm_err(exc),
             }
+        })
+    }
+}
+
+/// Trait for values that can be used as exception arguments.
+/// Analogous to pyo3's `PyErrArguments`.
+///
+/// Blanket-implemented for all types that implement `IntoPyObject` for any lifetime.
+/// This covers `String`, `&str`, `Key`, and other Python-convertible types.
+pub trait ExcArg {
+    fn into_exc_arg(self, py: Python<'_>) -> rustpython_vm::PyObjectRef;
+}
+
+/// Blanket impl for types implementing `IntoPyObject` for any lifetime.
+impl<T> ExcArg for T
+where
+    T: for<'py> crate::conversion::IntoPyObject<'py>,
+{
+    fn into_exc_arg(self, py: Python<'_>) -> rustpython_vm::PyObjectRef {
+        Python::with_gil(|py2| match self.into_pyobject(py2) {
+            Ok(bound) => crate::bound_object::BoundObject::into_any(bound).obj,
+            Err(_) => py.vm.ctx.none(),
         })
     }
 }
@@ -34,9 +58,9 @@ macro_rules! impl_exception {
         pub struct $name;
 
         impl $name {
-            /// Create a new `PyErr` with this exception type and a message.
-            pub fn new_err(msg: impl Into<String>) -> PyErr {
-                <Self as PyExceptionType>::new_err(msg)
+            /// Create a new `PyErr` with this exception type and a message or value.
+            pub fn new_err<A: ExcArg>(arg: A) -> PyErr {
+                <Self as PyExceptionType>::new_err(arg)
             }
         }
 
@@ -151,3 +175,92 @@ impl_exception!(PyUnicodeWarning, unicode_warning);
 impl_exception!(PyBytesWarning, bytes_warning);
 impl_exception!(PyResourceWarning, resource_warning);
 impl_exception!(PyEncodingWarning, encoding_warning);
+
+/// Create a new exception type. Analogous to pyo3's `create_exception!`.
+/// Usage: `create_exception!(module_name, ExceptionName, BaseException)`
+/// The generated struct implements `PyExceptionType` and `new_err()`.
+#[macro_export]
+macro_rules! create_exception {
+    ($module:ident, $name:ident, $base:ty) => {
+        pub struct $name;
+
+        impl $name {
+            pub fn new_err<A: $crate::exceptions::ExcArg>(arg: A) -> $crate::PyErr {
+                $crate::Python::with_gil(|py| {
+                    let vm = py.vm;
+                    let base_type =
+                        <$base as $crate::exceptions::PyExceptionType>::type_object_raw(py);
+                    let module_obj = vm
+                        .import($module.to_string(), vm.new_scope_with_builtins(), 0)
+                        .ok();
+                    let base_type_obj: rustpython_vm::PyObjectRef = base_type.to_owned().into();
+                    let name_str = vm.ctx.new_str(stringify!($name));
+                    let bases = vm.ctx.new_tuple(vec![base_type_obj]).into();
+                    let dict = vm.ctx.new_dict().into();
+                    let args = rustpython_vm::function::FuncArgs::new(
+                        vec![name_str.into(), bases, dict],
+                        rustpython_vm::function::KwArgs::default(),
+                    );
+                    let type_type = vm.ctx.types.type_type.as_object();
+                    let exc_type = match type_type.call_with_args(args, vm) {
+                        Ok(t) => t,
+                        Err(e) => return $crate::err::PyErr::from_vm_err(e),
+                    };
+                    if let Some(mod_obj) = module_obj {
+                        let _ = vm.set_attr(&mod_obj, stringify!($name), exc_type.clone());
+                    }
+                    let arg_obj = arg.into_exc_arg(py);
+                    match vm.invoke_exception(
+                        rustpython_vm::AsObject::as_object(&exc_type)
+                            .clone()
+                            .downcast_ref::<rustpython_vm::builtins::PyType>()
+                            .unwrap()
+                            .to_owned(),
+                        vec![arg_obj],
+                    ) {
+                        Ok(exc) => $crate::err::PyErr::from_vm_err(exc),
+                        Err(exc) => $crate::err::PyErr::from_vm_err(exc),
+                    }
+                })
+            }
+        }
+    };
+}
+
+/// Import an exception type from a module. Analogous to pyo3's `import_exception!`.
+/// Usage: `import_exception!(module_name, ExceptionName)`
+#[macro_export]
+macro_rules! import_exception {
+    ($module:ident, $name:ident) => {
+        pub struct $name;
+
+        impl $name {
+            pub fn new_err<A: $crate::exceptions::ExcArg>(arg: A) -> $crate::PyErr {
+                $crate::Python::with_gil(|py| {
+                    let vm = py.vm;
+                    let mod_obj =
+                        match vm.import($module.to_string(), vm.new_scope_with_builtins(), 0) {
+                            Ok(m) => m,
+                            Err(e) => return $crate::err::PyErr::from_vm_err(e),
+                        };
+                    let exc_type_obj = match vm.get_attr(&mod_obj, stringify!($name)) {
+                        Ok(obj) => obj,
+                        Err(e) => return $crate::err::PyErr::from_vm_err(e),
+                    };
+                    let arg_obj = arg.into_exc_arg(py);
+                    match vm.invoke_exception(
+                        rustpython_vm::AsObject::as_object(&exc_type_obj)
+                            .clone()
+                            .downcast_ref::<rustpython_vm::builtins::PyType>()
+                            .unwrap()
+                            .to_owned(),
+                        vec![arg_obj],
+                    ) {
+                        Ok(exc) => $crate::err::PyErr::from_vm_err(exc),
+                        Err(exc) => $crate::err::PyErr::from_vm_err(exc),
+                    }
+                })
+            }
+        }
+    };
+}

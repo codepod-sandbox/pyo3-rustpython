@@ -4,9 +4,8 @@
 pub struct PyAny;
 
 use rustpython_vm::{
-    builtins::{PyTuple as RpTuple, PyDict as RpDict},
+    builtins::{PyDict as RpDict, PyTuple as RpTuple},
     function::FuncArgs,
-    types::PyComparisonOp,
     AsObject, PyObjectRef,
 };
 
@@ -95,10 +94,11 @@ impl<'py> Bound<'py, PyAny> {
     // -----------------------------------------------------------------------
 
     /// Set an attribute by name. Equivalent to Python's `setattr(obj, name, value)`.
-    pub fn setattr(&self, name: &str, value: impl Into<PyObjectRef>) -> PyResult<()> {
+    pub fn setattr(&self, name: &str, value: impl crate::conversion::ToPyObject) -> PyResult<()> {
         let vm = self.py.vm;
         let name_obj = vm.ctx.new_str(name);
-        from_vm_result(self.obj.set_attr(&name_obj, value, vm))
+        let val_obj = value.to_object(self.py).obj;
+        from_vm_result(self.obj.set_attr(&name_obj, val_obj, vm))
     }
 
     /// Delete an attribute by name. Equivalent to Python's `delattr(obj, name)`.
@@ -120,6 +120,20 @@ impl<'py> Bound<'py, PyAny> {
     }
 
     // -----------------------------------------------------------------------
+    // Callable / Iterator
+    // -----------------------------------------------------------------------
+
+    /// Check if this object is callable. Equivalent to Python's `callable(obj)`.
+    pub fn is_callable(&self) -> bool {
+        self.obj.is_callable()
+    }
+
+    /// Return an iterator over this object. Equivalent to Python's `iter(obj)`.
+    pub fn iter(&self) -> PyResult<Bound<'py, crate::types::PyIterator>> {
+        self.try_iter()
+    }
+
+    // -----------------------------------------------------------------------
     // Calling
     // -----------------------------------------------------------------------
 
@@ -131,19 +145,23 @@ impl<'py> Bound<'py, PyAny> {
     ) -> PyResult<Bound<'py, PyAny>> {
         let vm = self.py.vm;
         let positional: Vec<PyObjectRef> = {
-            let tuple = args.obj.downcast_ref::<RpTuple>()
+            let tuple = args
+                .obj
+                .downcast_ref::<RpTuple>()
                 .expect("Bound<PyTuple> must wrap a tuple");
             tuple.as_slice().to_vec()
         };
         let func_args = match kwargs {
             Some(d) => {
-                let dict = d.obj.downcast_ref::<RpDict>()
+                let dict = d
+                    .obj
+                    .downcast_ref::<RpDict>()
                     .expect("Bound<PyDict> must wrap a dict");
                 let kw_pairs: Vec<(String, PyObjectRef)> = {
                     let mut pairs = Vec::new();
                     for (k, v) in dict {
                         let key_str: String = from_vm_result(
-                            rustpython_vm::convert::TryFromObject::try_from_object(vm, k)
+                            rustpython_vm::convert::TryFromObject::try_from_object(vm, k),
                         )?;
                         pairs.push((key_str, v));
                     }
@@ -168,8 +186,18 @@ impl<'py> Bound<'py, PyAny> {
     }
 
     /// Call the object with positional arguments only.
-    pub fn call1(&self, args: &Bound<'py, PyTuple>) -> PyResult<Bound<'py, PyAny>> {
-        self.call(args, None)
+    ///
+    /// Accepts either a `&Bound<'py, PyTuple>` or any tuple implementing
+    /// `IntoPyArgs` (e.g. `(arg,)`, `(arg1, arg2)`, etc.).
+    pub fn call1(
+        &self,
+        args: impl crate::conversion::IntoPyArgs<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let vm = self.py.vm;
+        let positional = args.into_py_args(self.py)?;
+        let func_args: FuncArgs = positional.into();
+        let result = from_vm_result(self.obj.call_with_args(func_args, vm))?;
+        Ok(Bound::from_object(self.py, result))
     }
 
     /// Call a method on the object with positional args and optional keyword args.
@@ -267,7 +295,9 @@ impl<'py> Bound<'py, PyAny> {
     }
 
     /// Check if this object is an instance of a specific Rust pyclass type.
-    pub fn is_instance_of<T: rustpython_vm::PyPayload + rustpython_vm::class::StaticType>(&self) -> bool {
+    pub fn is_instance_of<T: rustpython_vm::PyPayload + rustpython_vm::class::StaticType>(
+        &self,
+    ) -> bool {
         self.obj.downcast_ref::<T>().is_some()
     }
 
@@ -299,5 +329,25 @@ impl<'py> Bound<'py, PyAny> {
     /// Coerce the hash() return type to isize for pyo3 compatibility.
     pub fn hash_isize(&self) -> PyResult<isize> {
         self.hash().map(|h| h as isize)
+    }
+
+    /// Get the Python string representation (`str()`). Returns `PyResult` so
+    /// callers can handle conversion failures.
+    ///
+    /// Named `try_to_string` to avoid shadowing `ToString::to_string()` from
+    /// the `Display` blanket impl.
+    pub fn try_to_string(&self) -> PyResult<String> {
+        let vm = self.py.vm;
+        let str_val = from_vm_result(self.obj.str(vm))?;
+        Ok(str_val.as_str().to_string())
+    }
+}
+
+impl std::fmt::Display for Bound<'_, PyAny> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.try_to_string() {
+            Ok(s) => write!(f, "{}", s),
+            Err(_) => write!(f, "<unrepresentable>"),
+        }
     }
 }

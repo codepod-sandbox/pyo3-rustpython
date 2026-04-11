@@ -1,0 +1,16 @@
+[package]
+name = "blake3-pyo3"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "blake3-interp"
+path = "src/main.rs"
+
+[dependencies]
+pyo3 = { package = "pyo3-rustpython", path = "../../crates/pyo3-rustpython" }
+blake3 = { version = "1.5", features = ["mmap", "rayon"] }
+hex = "0.4"
+rayon = "1.11"
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893", default-features = false, features = ["stdlib", "freeze-stdlib", "encodings"] }
+rustpython-vm = { workspace = true }

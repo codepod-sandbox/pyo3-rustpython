@@ -9,6 +9,7 @@ name = "pyo3"
 
 [dependencies]
 rustpython-vm = { workspace = true }
+rustpython = { workspace = true }
 pyo3-rustpython-derive = { path = "../pyo3-rustpython-derive" }
 paste = "1"
 
