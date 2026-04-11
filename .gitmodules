@@ -4,3 +4,9 @@
 [submodule "third_party/pyo3"]
 	path = third_party/pyo3
 	url = https://github.com/PyO3/pyo3.git
+[submodule "third_party/blake3-py"]
+	path = third_party/blake3-py
+	url = https://github.com/oconnor663/blake3-py.git
+[submodule "third_party/rpds-py"]
+	path = third_party/rpds-py
+	url = https://github.com/crate-py/rpds.git

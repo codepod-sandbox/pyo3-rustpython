@@ -15,7 +15,7 @@ mod extension {
 }
 
 /// Upstream test vectors embedded at compile time.
-const TEST_VECTORS_JSON: &str = include_str!("../../../blake3-vendor/tests/test_vectors.json");
+const TEST_VECTORS_JSON: &str = include_str!("../../../third_party/blake3-py/tests/test_vectors.json");
 
 fn main() {
     let builder = InterpreterBuilder::new();

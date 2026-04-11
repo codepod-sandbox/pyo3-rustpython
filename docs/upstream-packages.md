@@ -24,7 +24,7 @@ Package source code under upstream checkouts is not edited directly in this repo
 | --- | --- | --- | --- | --- |
 | blake3-py | `third_party/blake3-py` | `oconnor663/blake3-py` | `examples/blake3` | pending |
 | jiter | `third_party/jiter` | `pydantic/jiter` | `examples/jiter` | pending |
-| rpds-py | `third_party/rpds-py` | `crate-py/rpds` | `examples/rpds` | pending |
+| rpds-py | `third_party/rpds-py` | `crate-py/rpds` | `examples/rpds` | `docs/upstream-prs/rpds-py.md` |
 | jsonschema-rs | `third_party/jsonschema-rs` | `Stranger6667/jsonschema-rs` | `examples/jsonschema-rs` | `docs/upstream-prs/jsonschema-rs.md` |
 
 ## PR Tracking
