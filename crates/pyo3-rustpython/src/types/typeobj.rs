@@ -32,6 +32,14 @@ impl<'py> Bound<'py, PyType> {
         Ok(Bound::from_object(self.py, result))
     }
 
+    pub fn call(
+        &self,
+        args: impl crate::conversion::IntoPyArgs<'py>,
+        _kwargs: Option<&crate::Bound<'py, crate::types::PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.call1(args)
+    }
+
     pub fn as_type_ptr(&self) -> *mut PyTypeObject {
         crate::ffi::pyobject_ref_as_ptr(&self.obj) as *mut PyTypeObject
     }
@@ -39,6 +47,14 @@ impl<'py> Bound<'py, PyType> {
     pub fn is_subtype_of(&self, other: &Bound<'py, PyType>) -> bool {
         let vm = self.py.vm;
         from_vm_result(self.obj.real_is_subclass(&other.obj, vm)).unwrap_or(false)
+    }
+
+    pub fn is_subclass_of<T: crate::PyTypeObjectExt>(&self) -> PyResult<bool> {
+        Ok(self.is_subtype_of(&T::type_object(self.py)))
+    }
+
+    pub fn is_subclass(&self, other: &Bound<'py, PyType>) -> PyResult<bool> {
+        Ok(self.is_subtype_of(other))
     }
 
     pub unsafe fn from_borrowed_type_ptr(

@@ -1,4 +1,5 @@
 use rustpython_vm::VirtualMachine;
+use std::borrow::Cow;
 use std::cell::Cell;
 
 thread_local! {
@@ -19,6 +20,10 @@ impl<'py> Python<'py> {
 
     pub fn vm(self) -> &'py VirtualMachine {
         self.vm
+    }
+
+    pub fn py(self) -> Self {
+        self
     }
 
     pub fn with_gil<F, R>(f: F) -> R
@@ -87,10 +92,71 @@ impl<'py> Python<'py> {
         Ok(crate::Bound::from_object(self, module))
     }
 
+    pub fn run(
+        self,
+        code: impl PyCodeInput,
+        globals: Option<&crate::Bound<'py, crate::types::PyDict>>,
+        locals: Option<&crate::Bound<'py, crate::types::PyDict>>,
+    ) -> crate::PyResult<()> {
+        let vm = self.vm;
+        let source = code.to_source();
+        let globals_dict = globals
+            .map(|d| {
+                d.obj.clone()
+                    .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>>(vm)
+                    .expect("Borrowed<PyDict> must wrap a dict")
+            })
+            .unwrap_or_else(|| vm.ctx.new_dict());
+        let locals_mapping = locals
+            .map(|d| {
+                d.obj.clone()
+                    .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>>(vm)
+                    .expect("Bound<PyDict> must wrap a dict")
+            })
+            .map(rustpython_vm::function::ArgMapping::from_dict_exact);
+        let scope = rustpython_vm::scope::Scope::with_builtins(locals_mapping, globals_dict, vm);
+        crate::err::from_vm_result(vm.run_string(scope, &source, "<embedded>".to_owned()))
+            .map(|_| ())
+    }
+
     /// Check if a Python object is truthy.
     #[doc(hidden)]
     pub fn is_truthy(self, obj: &crate::Bound<'py, crate::types::PyAny>) -> crate::PyResult<bool> {
         let vm = self.vm;
         crate::err::from_vm_result(obj.obj.clone().try_to_bool(vm))
+    }
+}
+
+pub trait PyCodeInput {
+    fn to_source(&self) -> Cow<'_, str>;
+}
+
+impl PyCodeInput for str {
+    fn to_source(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self)
+    }
+}
+
+impl PyCodeInput for String {
+    fn to_source(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.as_str())
+    }
+}
+
+impl PyCodeInput for std::ffi::CStr {
+    fn to_source(&self) -> Cow<'_, str> {
+        self.to_string_lossy()
+    }
+}
+
+impl PyCodeInput for std::ffi::CString {
+    fn to_source(&self) -> Cow<'_, str> {
+        self.as_c_str().to_source()
+    }
+}
+
+impl<T: PyCodeInput + ?Sized> PyCodeInput for &T {
+    fn to_source(&self) -> Cow<'_, str> {
+        (*self).to_source()
     }
 }

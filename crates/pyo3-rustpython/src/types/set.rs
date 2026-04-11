@@ -12,14 +12,16 @@ pub struct PySet;
 /// Marker type for a Python `frozenset` object.
 pub struct PyFrozenSet;
 
-impl<'py> Bound<'py, PySet> {
+impl PySet {
     /// Create a new empty Python set.
-    pub fn new(py: Python<'py>) -> Bound<'py, PySet> {
+    pub fn new<'py>(py: Python<'py>) -> Bound<'py, PySet> {
         let vm = py.vm;
         let obj: PyObjectRef = RpSet::default().into_ref(&vm.ctx).into();
         Bound::from_object(py, obj)
     }
+}
 
+impl<'py> Bound<'py, PySet> {
     /// Add a value to the set.
     pub fn add(&self, value: impl ToPyObject) -> PyResult<()> {
         let vm = self.py.vm;

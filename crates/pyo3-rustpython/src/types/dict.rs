@@ -11,6 +11,10 @@ use crate::{
 /// Marker type for a Python `dict` object.
 pub struct PyDict;
 
+pub trait IntoPyDict<'py> {
+    fn into_py_dict(self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>>;
+}
+
 impl PyDict {
     pub fn new<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
         let vm = py.vm;
@@ -20,10 +24,6 @@ impl PyDict {
 }
 
 impl<'py> Bound<'py, PyDict> {
-    pub fn new(py: Python<'py>) -> Bound<'py, PyDict> {
-        PyDict::new(py)
-    }
-
     pub fn new_bound(py: Python<'py>) -> Bound<'py, PyDict> {
         PyDict::new(py)
     }
@@ -176,5 +176,19 @@ impl<'py> IntoIterator for &Bound<'py, PyDict> {
             items,
             index: 0,
         }
+    }
+}
+
+impl<'py, K, V, const N: usize> IntoPyDict<'py> for [(K, V); N]
+where
+    K: AsRef<str>,
+    V: OurToPyObject,
+{
+    fn into_py_dict(self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        for (key, value) in self {
+            dict.set_item(key.as_ref(), value)?;
+        }
+        Ok(dict)
     }
 }

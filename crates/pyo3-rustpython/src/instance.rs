@@ -81,10 +81,26 @@ impl<T> Py<T> {
     pub fn borrow<'py>(&self, py: Python<'py>) -> Bound<'py, T> {
         Bound::from_object(py, self.obj.clone())
     }
+
 }
 
 // Methods specific to Py<PyAny>
 impl Py<crate::types::PyAny> {
+    pub fn new<'py, T, I>(py: Python<'py>, value: I) -> crate::PyResult<Py<T>>
+    where
+        I: Into<PyClassInitializer<T>>,
+        T: rustpython_vm::PyPayload + std::fmt::Debug,
+    {
+        match value.into() {
+            PyClassInitializer::Value(value) => {
+                let typ = <T as rustpython_vm::PyPayload>::class(&py.vm.ctx).to_owned();
+                let obj: PyObjectRef = rustpython_vm::PyRef::new_ref(value, typ, None).into();
+                Ok(Py::from_object(obj))
+            }
+            PyClassInitializer::WithBase(_, create_base) => Ok(Py::from_object(create_base(py))),
+        }
+    }
+
     /// Convert a `Bound<'_, PyAny>` into `Py<PyAny>`.
     ///
     /// This is an inherent method so that `Py::<PyAny>::try_from` used as a
@@ -240,6 +256,15 @@ pub struct Bound<'py, T> {
 }
 
 impl<'py, T> Bound<'py, T> {
+    pub fn new<I>(py: Python<'py>, value: I) -> crate::PyResult<Bound<'py, T>>
+    where
+        I: Into<PyClassInitializer<T>>,
+        T: rustpython_vm::PyPayload + std::fmt::Debug,
+    {
+        let py_obj = <Py<crate::types::PyAny>>::new(py, value)?;
+        Ok(Bound::from_object(py, py_obj.obj))
+    }
+
     fn marker_type_matches<U>(&self) -> Option<bool> {
         let type_name = std::any::type_name::<U>();
         if type_name.contains("PyType")
@@ -285,6 +310,14 @@ impl<'py, T> Bound<'py, T> {
                 self.obj
                     .class()
                     .fast_issubclass(self.py.vm.ctx.types.module_type),
+            );
+        }
+        if type_name.contains("::types::sequence::PySequence") {
+            let vm = self.py.vm;
+            return Some(
+                self.obj.class().fast_issubclass(vm.ctx.types.list_type)
+                    || self.obj.class().fast_issubclass(vm.ctx.types.tuple_type)
+                    || vm.call_method(&self.obj, "__getitem__", (0isize,)).is_ok(),
             );
         }
         None
@@ -580,6 +613,37 @@ impl<'py, T> Bound<'py, T> {
             obj: self.obj.clone(),
             _marker: PhantomData,
         })
+    }
+}
+
+pub enum PyClassInitializer<T: rustpython_vm::PyPayload> {
+    Value(T),
+    WithBase(T, Box<dyn FnOnce(Python<'_>) -> PyObjectRef + 'static>),
+}
+
+impl<T> From<T> for PyClassInitializer<T>
+where
+    T: rustpython_vm::PyPayload + std::fmt::Debug,
+{
+    fn from(value: T) -> Self {
+        Self::Value(value)
+    }
+}
+
+impl<T, B> From<(T, B)> for PyClassInitializer<T>
+where
+    T: rustpython_vm::PyPayload,
+    B: rustpython_vm::PyPayload + std::fmt::Debug,
+{
+    fn from(value: (T, B)) -> Self {
+        let (sub, base) = value;
+        Self::WithBase(
+            sub,
+            Box::new(move |py| {
+                let typ = <T as rustpython_vm::PyPayload>::class(&py.vm.ctx).to_owned();
+                rustpython_vm::PyRef::new_ref(base, typ, None).into()
+            }),
+        )
     }
 }
 

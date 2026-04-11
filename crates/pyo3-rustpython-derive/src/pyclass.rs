@@ -154,7 +154,7 @@ pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
     let base_init = if let Some(ref base_path) = options.extends {
         quote! {
             {
-                let base_type = <#base_path as ::rustpython_vm::PyPayload>::class(ctx);
+                let base_type = <#base_path as ::pyo3::PyTypeObjectExt>::type_object_raw(ctx);
                 let child_type = <Self as ::rustpython_vm::class::StaticType>::static_type();
                 *child_type.bases.write() = vec![base_type.to_owned()];
                 let base_mro: Vec<_> = base_type.mro.read().iter().cloned().collect();
@@ -238,6 +238,8 @@ fn collect_accessors(fields: &Fields, get_all: bool) -> Result<Vec<FieldAccessor
                     get = true;
                 } else if meta.path.is_ident("set") {
                     set = true;
+                } else if meta.path.is_ident("name") {
+                    let _ = meta.value()?.parse::<syn::LitStr>()?;
                 }
                 Ok(())
             })?;

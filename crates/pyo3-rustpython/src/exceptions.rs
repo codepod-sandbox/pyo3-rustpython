@@ -71,6 +71,19 @@ macro_rules! impl_exception {
                 py.vm.ctx.exceptions.$zoo_field
             }
         }
+
+        impl crate::PyTypeObjectExt for $name {
+            fn type_object_raw(
+                ctx: &rustpython_vm::Context,
+            ) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType> {
+                ctx.exceptions.$zoo_field
+            }
+        }
+
+        impl crate::PyTypeInfo for $name {
+            const NAME: &'static str = stringify!($name);
+            const MODULE: Option<&'static str> = Some("builtins");
+        }
     };
 }
 

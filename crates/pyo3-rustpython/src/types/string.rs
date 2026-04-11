@@ -14,12 +14,6 @@ impl PyString {
 }
 
 impl<'py> Bound<'py, PyString> {
-    /// Create a new Python string from a Rust `&str`.
-    pub fn new(py: Python<'py>, s: &str) -> Bound<'py, PyString> {
-        let obj: PyObjectRef = py.vm.ctx.new_str(s).into();
-        Bound::from_object(py, obj)
-    }
-
     /// Extract the string value as a `&str`.
     ///
     /// Returns an error if the underlying object is not a valid Python `str`.

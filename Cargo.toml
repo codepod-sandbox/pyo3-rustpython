@@ -9,6 +9,7 @@ members = [
     "examples/jiter",
     "examples/blake3",
     "examples/jsonschema-rs",
+    "examples/pyo3-tests",
 ]
 resolver = "2"
 

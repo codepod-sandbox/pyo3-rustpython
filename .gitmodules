@@ -1,3 +1,6 @@
 [submodule "third_party/jsonschema-rs"]
 	path = third_party/jsonschema-rs
 	url = https://github.com/Stranger6667/jsonschema-rs.git
+[submodule "third_party/pyo3"]
+	path = third_party/pyo3
+	url = https://github.com/PyO3/pyo3.git

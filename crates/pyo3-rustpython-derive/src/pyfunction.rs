@@ -1,9 +1,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::Parser;
-use syn::{FnArg, ItemFn, Pat, Result, ReturnType};
+use syn::{Attribute, FnArg, ItemFn, Pat, Result, ReturnType};
 
-pub fn expand(attr: TokenStream, input: ItemFn) -> Result<TokenStream> {
+pub fn expand(attr: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
     let fn_name = &input.sig.ident;
     let mut fn_name_str = fn_name.to_string();
     let wrapper_name = format_ident!("__pyo3_fn_{}", fn_name);
@@ -13,6 +13,11 @@ pub fn expand(attr: TokenStream, input: ItemFn) -> Result<TokenStream> {
             let value = meta.value()?;
             let lit: syn::LitStr = value.parse()?;
             fn_name_str = lit.value();
+        } else if meta.input.peek(syn::Token![=]) {
+            let value = meta.value()?;
+            let _: proc_macro2::TokenStream = value.parse()?;
+        } else if meta.input.peek(syn::token::Paren) {
+            meta.parse_nested_meta(|_| Ok(()))?;
         }
         Ok(())
     });
@@ -23,7 +28,7 @@ pub fn expand(attr: TokenStream, input: ItemFn) -> Result<TokenStream> {
 
     let mut arg_index: usize = 0;
 
-    for arg in &input.sig.inputs {
+    for arg in &mut input.sig.inputs {
         let FnArg::Typed(pat_type) = arg else {
             return Err(syn::Error::new_spanned(
                 arg,
@@ -43,13 +48,15 @@ pub fn expand(attr: TokenStream, input: ItemFn) -> Result<TokenStream> {
 
         let ty = &pat_type.ty;
         let ty_str = quote!(#ty).to_string().replace(' ', "");
+        let from_py_with = take_from_py_with_attr(&mut pat_type.attrs)?;
 
         if ty_str.contains("Python") {
             call_exprs.push(quote! { ::pyo3::Python::from_vm(__vm) });
             continue;
         }
 
-        let (extraction, call_expr) = gen_extraction(&ty_str, &pat_name, &mut arg_index)?;
+        let (extraction, call_expr) =
+            gen_extraction(&ty_str, &pat_name, &mut arg_index, from_py_with.as_ref())?;
         extraction_stmts.push(extraction);
         call_exprs.push(call_expr);
     }
@@ -138,10 +145,29 @@ fn gen_extraction(
     ty_str: &str,
     name: &syn::Ident,
     arg_index: &mut usize,
+    from_py_with: Option<&TokenStream>,
 ) -> Result<(TokenStream, TokenStream)> {
     let _idx = *arg_index;
     *arg_index += 1;
     let py_name = name.to_string();
+
+    if let Some(from_py_with) = from_py_with {
+        return Ok((
+            quote! {
+                let #name = #from_py_with(
+                    &::pyo3::Bound::from_object(
+                        ::pyo3::Python::from_vm(__vm),
+                        __args.take_positional_keyword(#py_name).ok_or_else(|| {
+                            __vm.new_type_error(
+                                format!("missing required argument: {}", stringify!(#name))
+                            )
+                        })?
+                    )
+                ).map_err(|e: ::pyo3::PyErr| ::pyo3::err::into_vm_err(e))?;
+            },
+            quote! { #name },
+        ));
+    }
 
     if ty_str.contains("Python") {
         *arg_index -= 1;
@@ -325,6 +351,25 @@ fn gen_extraction(
             ))
         }
     }
+}
+
+fn take_from_py_with_attr(attrs: &mut Vec<Attribute>) -> Result<Option<TokenStream>> {
+    let mut from_py_with = None;
+    attrs.retain(|attr| {
+        if !attr.path().is_ident("pyo3") {
+            return true;
+        }
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("from_py_with") {
+                let value = meta.value()?;
+                let expr: syn::Expr = value.parse()?;
+                from_py_with = Some(quote! { #expr });
+            }
+            Ok(())
+        });
+        false
+    });
+    Ok(from_py_with)
 }
 
 /// Generate extraction for Option<T> parameters.

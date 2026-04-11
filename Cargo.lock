@@ -2044,10 +2044,9 @@ version = "0.46.0"
 dependencies = [
  "built",
  "jsonschema",
+ "pyo3",
  "pyo3-build-config",
  "pyo3-built",
- "pyo3-rustpython",
- "rustpython-vm",
  "serde",
  "serde_json",
 ]
@@ -3149,6 +3148,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "pyo3-tests"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "pyo3-rustpython",
+ "pyo3-rustpython-derive",
+ "rustpython",
+ "rustpython-vm",
+ "uuid",
 ]
 
 [[package]]

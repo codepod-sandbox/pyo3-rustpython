@@ -684,21 +684,42 @@ fn generate_slot_method_wrapper(
         }
     }
 
-    let receiver = method.sig.inputs.first().and_then(|a| {
+    let mut_receiver = method.sig.inputs.first().and_then(|a| {
         if let FnArg::Receiver(r) = a {
-            Some(quote! { #r })
+            Some(r.mutability.is_some())
+        } else {
+            None
+        }
+    }).unwrap_or(false);
+
+    let wrapper_receiver = method.sig.inputs.first().and_then(|a| {
+        if let FnArg::Receiver(r) = a {
+            if r.mutability.is_some() {
+                Some(quote! { __slf: &::rustpython_vm::Py<Self> })
+            } else {
+                Some(quote! { #r })
+            }
         } else {
             None
         }
     });
-    let receiver = receiver.unwrap_or(quote! { &self });
+    let wrapper_receiver = wrapper_receiver.unwrap_or(quote! { &self });
     let has_receiver = method
         .sig
         .inputs
         .iter()
         .any(|a| matches!(a, FnArg::Receiver(_)));
     let call_expr = if has_receiver {
-        quote! { self.#fn_name(#(#inner_call_args),*) }
+        if mut_receiver {
+            quote! {
+                {
+                    let mut __pyo3_slf = ::pyo3::PyRefMut::from_vm_ref(__py, __slf.to_owned());
+                    __pyo3_slf.#fn_name(#(#inner_call_args),*)
+                }
+            }
+        } else {
+            quote! { self.#fn_name(#(#inner_call_args),*) }
+        }
     } else {
         quote! { Self::#fn_name(#(#inner_call_args),*) }
     };
@@ -707,7 +728,7 @@ fn generate_slot_method_wrapper(
     quote! {
         #(#attrs)*
         #[pymethod(name = #slot_name_str)]
-        #vis fn #wrapper_name #generics(#receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
+        #vis fn #wrapper_name #generics(#wrapper_receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
             let _vm = vm;
             let __py = ::pyo3::Python::from_vm(_vm);
             let py = __py;
@@ -805,6 +826,9 @@ fn generate_next_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStrea
 // ─── Regular Method Wrappers ──────────────────────────────────────────────────
 
 fn needs_wrapper(method: &ImplItemFn) -> bool {
+    if method.sig.inputs.iter().any(|arg| matches!(arg, FnArg::Receiver(r) if r.mutability.is_some())) {
+        return true;
+    }
     if returns_pyo3_result(&method.sig.output) {
         return true;
     }
@@ -960,21 +984,51 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
         .iter()
         .any(|a| matches!(a, FnArg::Receiver(_)));
 
-    let receiver = method.sig.inputs.first().and_then(|a| {
+    let wrapper_receiver = method.sig.inputs.first().and_then(|a| {
+        if let FnArg::Receiver(r) = a {
+            if r.mutability.is_some() {
+                Some(quote! { __slf: &::rustpython_vm::Py<Self> })
+            } else {
+                Some(quote! { #r })
+            }
+        } else {
+            None
+        }
+    });
+    let wrapper_receiver = wrapper_receiver.unwrap_or(quote! { &self });
+    let inner_receiver = method.sig.inputs.first().and_then(|a| {
         if let FnArg::Receiver(r) = a {
             Some(quote! { #r })
         } else {
             None
         }
     });
-    let receiver = receiver.unwrap_or(quote! { &self });
+    let inner_receiver = inner_receiver.unwrap_or(quote! { &self });
     let inner_signature = if has_receiver {
-        quote! { (#receiver, #(#inner_params),*) }
+        quote! { (#inner_receiver, #(#inner_params),*) }
     } else {
         quote! { (#(#inner_params),*) }
     };
+    let mut_receiver = method
+        .sig
+        .inputs
+        .first()
+        .and_then(|a| match a {
+            FnArg::Receiver(r) => Some(r.mutability.is_some()),
+            _ => None,
+        })
+        .unwrap_or(false);
     let call_expr = if has_receiver {
-        quote! { self.#fn_name(#(#inner_call_args),*) }
+        if mut_receiver {
+            quote! {
+                {
+                    let mut self_ = ::pyo3::PyRefMut::from_vm_ref(__py, __slf.to_owned());
+                    self_.#fn_name(#(#inner_call_args),*)
+                }
+            }
+        } else {
+            quote! { self.#fn_name(#(#inner_call_args),*) }
+        }
     } else {
         quote! { Self::#fn_name(#(#inner_call_args),*) }
     };
@@ -991,7 +1045,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
         quote! {
             #(#attrs)*
             #[pymethod(name = #fn_name_str)]
-            #vis fn #wrapper_name #generics(#receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
+            #vis fn #wrapper_name #generics(#wrapper_receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
                 let _vm = vm;
                 let __py = ::pyo3::Python::from_vm(_vm);
                 let py = __py;
@@ -1015,7 +1069,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
         quote! {
             #(#attrs)*
             #[pymethod(name = #fn_name_str)]
-            #vis fn #wrapper_name #generics(#receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
+            #vis fn #wrapper_name #generics(#wrapper_receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
                 let _vm = vm;
                 let __py = ::pyo3::Python::from_vm(_vm);
                 let py = __py;

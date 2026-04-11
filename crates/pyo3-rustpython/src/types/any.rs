@@ -4,7 +4,7 @@
 pub struct PyAny;
 
 use rustpython_vm::{
-    builtins::{PyDict as RpDict, PyTuple as RpTuple},
+    builtins::PyDict as RpDict,
     function::FuncArgs,
     AsObject, PyObjectRef,
 };
@@ -140,17 +140,11 @@ impl<'py> Bound<'py, PyAny> {
     /// Call the object with positional args and optional keyword args.
     pub fn call(
         &self,
-        args: &Bound<'py, PyTuple>,
+        args: impl crate::conversion::IntoPyArgs<'py>,
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let vm = self.py.vm;
-        let positional: Vec<PyObjectRef> = {
-            let tuple = args
-                .obj
-                .downcast_ref::<RpTuple>()
-                .expect("Bound<PyTuple> must wrap a tuple");
-            tuple.as_slice().to_vec()
-        };
+        let positional = args.into_py_args(self.py)?;
         let func_args = match kwargs {
             Some(d) => {
                 let dict = d
@@ -204,7 +198,7 @@ impl<'py> Bound<'py, PyAny> {
     pub fn call_method(
         &self,
         name: &str,
-        args: &Bound<'py, PyTuple>,
+        args: impl crate::conversion::IntoPyArgs<'py>,
         kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let method = self.getattr(name)?;
@@ -243,8 +237,13 @@ impl<'py> Bound<'py, PyAny> {
     }
 
     /// Identity check: returns `true` if `self` and `other` are the same object.
-    pub fn is(&self, other: &Bound<'py, PyAny>) -> bool {
+    pub fn is<T>(&self, other: &Bound<'py, T>) -> bool {
         self.obj.is(&other.obj)
+    }
+
+    pub fn str(&self) -> PyResult<Bound<'py, PyString>> {
+        let s = self.call_method0("__str__")?;
+        Ok(Bound::from_object(self.py, s.obj))
     }
 
     // -----------------------------------------------------------------------

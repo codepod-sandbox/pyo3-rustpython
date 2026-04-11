@@ -10,6 +10,23 @@ use crate::{err::PyResult, instance::Bound, python::Python, types::PyAny};
 /// Marker type for a Python `list` object.
 pub struct PyList;
 
+impl rustpython_vm::object::MaybeTraverse for PyList {
+    const HAS_TRAVERSE: bool = false;
+    const HAS_CLEAR: bool = false;
+
+    fn try_traverse(&self, _tracer_fn: &mut rustpython_vm::object::TraverseFn) {}
+
+    fn try_clear(&mut self, _out: &mut Vec<rustpython_vm::PyObjectRef>) {}
+}
+
+impl rustpython_vm::PyPayload for PyList {
+    fn class(
+        ctx: &rustpython_vm::Context,
+    ) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType> {
+        ctx.types.list_type
+    }
+}
+
 impl PyList {
     pub fn new<'py, T: crate::conversion::ToPyObject>(
         py: Python<'py>,
@@ -31,14 +48,6 @@ impl PyList {
 }
 
 impl<'py> Bound<'py, PyList> {
-    /// Create a new list from a slice of `Bound<'py, PyAny>` elements.
-    pub fn new(py: Python<'py>, elements: &[Bound<'py, PyAny>]) -> Bound<'py, PyList> {
-        let vm = py.vm;
-        let elems: Vec<PyObjectRef> = elements.iter().map(|e| e.obj.clone()).collect();
-        let obj: PyObjectRef = vm.ctx.new_list(elems).into();
-        Bound::from_object(py, obj)
-    }
-
     /// Create an empty list.
     pub fn empty(py: Python<'py>) -> Bound<'py, PyList> {
         let obj: PyObjectRef = py.vm.ctx.new_list(vec![]).into();

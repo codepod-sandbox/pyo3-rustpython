@@ -26,14 +26,6 @@ impl PyTuple {
 }
 
 impl<'py> Bound<'py, PyTuple> {
-    /// Create a new tuple from a slice of `Bound<'py, PyAny>` elements.
-    pub fn new(py: Python<'py>, elements: &[Bound<'py, PyAny>]) -> Bound<'py, PyTuple> {
-        let vm = py.vm;
-        let elems: Vec<PyObjectRef> = elements.iter().map(|e| e.obj.clone()).collect();
-        let obj: PyObjectRef = vm.ctx.new_tuple(elems).into();
-        Bound::from_object(py, obj)
-    }
-
     /// Create an empty tuple.
     pub fn empty(py: Python<'py>) -> Bound<'py, PyTuple> {
         let obj: PyObjectRef = py.vm.ctx.empty_tuple.clone().into();

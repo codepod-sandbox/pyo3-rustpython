@@ -6,6 +6,11 @@ use crate::{instance::Bound, python::Python};
 pub struct PyBytes;
 
 impl PyBytes {
+    pub fn new<'py>(py: Python<'py>, data: &[u8]) -> Bound<'py, PyBytes> {
+        let obj: PyObjectRef = py.vm.ctx.new_bytes(data.to_vec()).into();
+        Bound::from_object(py, obj)
+    }
+
     /// Create a new Python `bytes` object of `len` bytes, initialized by a
     /// callback. This mirrors pyo3's `PyBytes::new_with`.
     pub fn new_with<'py>(
@@ -15,17 +20,11 @@ impl PyBytes {
     ) -> crate::PyResult<Bound<'py, PyBytes>> {
         let mut data = vec![0u8; len];
         init(&mut data)?;
-        Ok(<Bound<'py, PyBytes>>::new(py, &data))
+        Ok(PyBytes::new(py, &data))
     }
 }
 
 impl<'py> Bound<'py, PyBytes> {
-    /// Create a new Python `bytes` object from a byte slice.
-    pub fn new(py: Python<'py>, data: &[u8]) -> Bound<'py, PyBytes> {
-        let obj: PyObjectRef = py.vm.ctx.new_bytes(data.to_vec()).into();
-        Bound::from_object(py, obj)
-    }
-
     /// Access the underlying byte data.
     pub fn as_bytes(&self) -> &[u8] {
         let pybytes = self

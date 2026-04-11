@@ -148,10 +148,27 @@ fn derive_from_py_object_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
                 }
             })
         }
-        syn::Fields::Named(_) => Err(syn::Error::new_spanned(
-            &input.ident,
-            "FromPyObject derive for named structs is not yet supported in this shim",
-        )),
+        syn::Fields::Named(named) => {
+            let field_names: Vec<_> = named
+                .named
+                .iter()
+                .map(|f| f.ident.as_ref().unwrap())
+                .collect();
+            let field_types: Vec<_> = named.named.iter().map(|f| &f.ty).collect();
+            Ok(quote! {
+                impl<'py> ::pyo3::FromPyObject<'py> for #ident {
+                    fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
+                        Ok(Self {
+                            #(
+                                #field_names: ob
+                                    .getattr(stringify!(#field_names))?
+                                    .extract::<#field_types>()?
+                            ),*
+                        })
+                    }
+                }
+            })
+        }
         syn::Fields::Unit => Ok(quote! {
             impl<'py> ::pyo3::FromPyObject<'py> for #ident {
                 fn extract_bound(_ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {

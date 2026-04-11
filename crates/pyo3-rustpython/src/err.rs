@@ -83,9 +83,18 @@ impl PyErr {
         obj.fast_isinstance(exc_type)
     }
 
-    /// Check if this exception matches a given type.
-    pub fn matches<T: crate::exceptions::PyExceptionType>(&self, py: crate::Python<'_>) -> bool {
-        self.is_instance_of::<T>(py)
+    /// Check if this exception matches a given type object.
+    pub fn matches(
+        &self,
+        py: crate::Python<'_>,
+        ty: &crate::Bound<'_, crate::types::PyType>,
+    ) -> crate::PyResult<bool> {
+        let obj: &rustpython_vm::PyObject = self.inner.as_ref();
+        Ok(obj.fast_isinstance(
+            ty.obj
+                .downcast_ref::<rustpython_vm::builtins::PyType>()
+                .expect("Bound<PyType> must wrap a type"),
+        ))
     }
 
     /// Create a PyErr from an existing Python exception object (Bound).
@@ -126,6 +135,10 @@ impl PyErr {
 
     pub fn restore(self) {
         set_current_exception(Some(self.inner));
+    }
+
+    pub fn display<'py>(&self, py: crate::Python<'py>) -> crate::Bound<'py, crate::types::PyAny> {
+        self.value(py)
     }
 }
 
@@ -168,6 +181,12 @@ impl From<std::io::Error> for PyErr {
 impl From<std::convert::Infallible> for PyErr {
     fn from(x: std::convert::Infallible) -> Self {
         match x {}
+    }
+}
+
+impl From<std::num::TryFromIntError> for PyErr {
+    fn from(e: std::num::TryFromIntError) -> Self {
+        crate::exceptions::PyValueError::new_err(e.to_string())
     }
 }
 

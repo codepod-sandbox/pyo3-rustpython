@@ -73,32 +73,41 @@ pub use types::module::WrapPyFn;
 pub trait PyTypeInfo {
     const NAME: &'static str;
     const MODULE: Option<&'static str>;
+
+    fn type_object(py: Python<'_>) -> Bound<'_, types::PyType>
+    where
+        Self: PyTypeObjectExt + Sized,
+    {
+        <Self as PyTypeObjectExt>::type_object(py)
+    }
 }
 
 pub trait PyTypeObjectExt {
-    fn type_object(py: Python<'_>) -> Bound<'_, types::PyType>
+    fn type_object_raw(ctx: &rustpython_vm::Context) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType>
     where
         Self: Sized;
+
+    fn type_object(py: Python<'_>) -> Bound<'_, types::PyType>
+    where
+        Self: Sized,
+    {
+        let obj: rustpython_vm::PyObjectRef = Self::type_object_raw(&py.vm.ctx).to_owned().into();
+        Bound::from_object(py, obj)
+    }
 }
 
-impl<T: rustpython_vm::class::StaticType + rustpython_vm::class::PyClassImpl> PyTypeObjectExt
-    for T
+impl<T: rustpython_vm::PyPayload> PyTypeObjectExt for T
 {
-    fn type_object(py: Python<'_>) -> Bound<'_, types::PyType> {
-        <Self as rustpython_vm::class::PyClassImpl>::make_class(&py.vm.ctx);
-        let type_ref = Self::static_type();
-        let obj: rustpython_vm::PyObjectRef = type_ref.to_owned().into();
-        Bound::from_object(py, obj)
+    fn type_object_raw(ctx: &rustpython_vm::Context) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType> {
+        T::class(ctx)
     }
 }
 
 macro_rules! impl_pytypeobjectext_for_builtin {
     ($ty:ident, $type_field:ident) => {
         impl PyTypeObjectExt for types::$ty {
-            fn type_object(py: Python<'_>) -> Bound<'_, types::PyType> {
-                let type_ref = py.vm.ctx.types.$type_field;
-                let obj: rustpython_vm::PyObjectRef = type_ref.to_owned().into();
-                Bound::from_object(py, obj)
+            fn type_object_raw(ctx: &rustpython_vm::Context) -> &'static rustpython_vm::Py<rustpython_vm::builtins::PyType> {
+                ctx.types.$type_field
             }
         }
     };
@@ -108,7 +117,6 @@ impl_pytypeobjectext_for_builtin!(PyString, str_type);
 impl_pytypeobjectext_for_builtin!(PyBool, bool_type);
 impl_pytypeobjectext_for_builtin!(PyInt, int_type);
 impl_pytypeobjectext_for_builtin!(PyFloat, float_type);
-impl_pytypeobjectext_for_builtin!(PyList, list_type);
 impl_pytypeobjectext_for_builtin!(PyDict, dict_type);
 impl_pytypeobjectext_for_builtin!(PyTuple, tuple_type);
 impl_pytypeobjectext_for_builtin!(PySet, set_type);
@@ -122,7 +130,7 @@ pub trait Pyo3Accessors {
 }
 
 pub trait Pyo3BasePayload {
-    type BasePayload: rustpython_vm::PyPayload;
+    type BasePayload;
 }
 
 #[doc(hidden)]
@@ -269,7 +277,9 @@ macro_rules! wrap_pyfunction {
         }
     };
     ($func:ident) => {
-        compile_error!("wrap_pyfunction! single-argument form not supported; use wrap_pyfunction!(func, module)")
+        $crate::paste! {
+            |__py| Ok::<_, $crate::PyErr>([<__pyo3_fn_ $func>](__py))
+        }
     };
     ($mod:ident :: $func:ident, $module:expr) => {
         $crate::paste! {
@@ -286,4 +296,21 @@ macro_rules! wrap_pyfunction {
             Ok::<_, $crate::PyErr>(crate::$mod::[<__pyo3_fn_ $func>]($module.py()))
         }
     };
+}
+
+#[macro_export]
+macro_rules! py_run {
+    ($py:expr, *$dict:expr, $code:expr) => {{
+        $py.run(
+            &::std::ffi::CString::new($code).unwrap(),
+            None,
+            Some(&$dict),
+        )
+        .unwrap()
+    }};
+    ($py:expr, $($val:ident)+, $code:expr) => {{
+        use $crate::types::IntoPyDict;
+        let __dict = [$((stringify!($val), &$val),)+].into_py_dict($py).unwrap();
+        $crate::py_run!($py, *__dict, $code)
+    }};
 }

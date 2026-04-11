@@ -1,0 +1,35 @@
+[package]
+name = "pyo3-tests"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["macros"]
+macros = []
+
+[dependencies]
+pyo3 = { package = "pyo3-rustpython", path = "../../crates/pyo3-rustpython" }
+pyo3_macros = { package = "pyo3-rustpython-derive", path = "../../crates/pyo3-rustpython-derive" }
+once_cell = "1"
+rustpython = { workspace = true }
+rustpython-vm = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+
+[lib]
+path = "src/lib.rs"
+
+[[test]]
+name = "test_pyfunction"
+path = "../../third_party/pyo3/tests/test_pyfunction.rs"
+
+[[test]]
+name = "test_inheritance"
+path = "tests/test_inheritance.rs"
+
+[[test]]
+name = "test_mapping"
+path = "../../third_party/pyo3/tests/test_mapping.rs"
+
+[[test]]
+name = "test_sequence"
+path = "../../third_party/pyo3/tests/test_sequence.rs"

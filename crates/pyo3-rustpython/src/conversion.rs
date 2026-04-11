@@ -436,6 +436,12 @@ pub trait IntoPyArgs<'py> {
     fn into_py_args(self, py: Python<'py>) -> PyResult<Vec<PyObjectRef>>;
 }
 
+impl<'py> IntoPyArgs<'py> for () {
+    fn into_py_args(self, _py: Python<'py>) -> PyResult<Vec<PyObjectRef>> {
+        Ok(Vec::new())
+    }
+}
+
 fn to_pyobj_ref<T: rustpython_vm::convert::ToPyObject>(
     val: T,
     vm: &rustpython_vm::VirtualMachine,
