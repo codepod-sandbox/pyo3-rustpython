@@ -1,11 +1,22 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use syn::parse::Parser;
 use syn::{FnArg, ItemFn, Pat, Result, ReturnType};
 
-pub fn expand(_attr: TokenStream, input: ItemFn) -> Result<TokenStream> {
+pub fn expand(attr: TokenStream, input: ItemFn) -> Result<TokenStream> {
     let fn_name = &input.sig.ident;
-    let fn_name_str = fn_name.to_string();
+    let mut fn_name_str = fn_name.to_string();
     let wrapper_name = format_ident!("__pyo3_fn_{}", fn_name);
+
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("name") {
+            let value = meta.value()?;
+            let lit: syn::LitStr = value.parse()?;
+            fn_name_str = lit.value();
+        }
+        Ok(())
+    });
+    parser.parse2(attr)?;
 
     let mut extraction_stmts: Vec<TokenStream> = vec![];
     let mut call_exprs: Vec<TokenStream> = vec![];
@@ -130,6 +141,7 @@ fn gen_extraction(
 ) -> Result<(TokenStream, TokenStream)> {
     let _idx = *arg_index;
     *arg_index += 1;
+    let py_name = name.to_string();
 
     if ty_str.contains("Python") {
         *arg_index -= 1;
@@ -142,7 +154,7 @@ fn gen_extraction(
             let bound_name = format_ident!("__bound_{}", name);
             return Ok((
                 quote! {
-                    let #name = __args.take_positional().ok_or_else(|| {
+                    let #name = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                         __vm.new_type_error(
                             format!("missing required argument: {}", stringify!(#name))
                         )
@@ -159,7 +171,7 @@ fn gen_extraction(
             return Ok((
                 quote! {
                     let #name: #inner_t = ::pyo3::Py::from(
-                        __args.take_positional().ok_or_else(|| {
+                        __args.take_positional_keyword(#py_name).ok_or_else(|| {
                             __vm.new_type_error(
                                 format!("missing required argument: {}", stringify!(#name))
                             )
@@ -176,7 +188,7 @@ fn gen_extraction(
                 let #name = <&#t as ::pyo3::FromPyObject>::extract_bound(
                     &::pyo3::Bound::from_object(
                         ::pyo3::Python::from_vm(__vm),
-                        __args.take_positional().ok_or_else(|| {
+                        __args.take_positional_keyword(#py_name).ok_or_else(|| {
                             __vm.new_type_error(
                                 format!("missing required argument: {}", stringify!(#name))
                             )
@@ -200,7 +212,7 @@ fn gen_extraction(
     match ty_str.as_ref() {
         "&str" => Ok((
             quote! {
-                let #name: ::rustpython_vm::builtins::PyStrRef = __args.take_positional().ok_or_else(|| {
+                let #name: ::rustpython_vm::builtins::PyStrRef = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                     __vm.new_type_error(
                         format!("missing required argument: {}", stringify!(#name))
                     )
@@ -210,7 +222,7 @@ fn gen_extraction(
         )),
         "String" => Ok((
             quote! {
-                let #name: ::rustpython_vm::builtins::PyStrRef = __args.take_positional().ok_or_else(|| {
+                let #name: ::rustpython_vm::builtins::PyStrRef = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                     __vm.new_type_error(
                         format!("missing required argument: {}", stringify!(#name))
                     )
@@ -222,7 +234,7 @@ fn gen_extraction(
             let t: TokenStream = ty_str.parse().unwrap();
             Ok((
                 quote! {
-                    let #name: i64 = __args.take_positional().ok_or_else(|| {
+                    let #name: i64 = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                         __vm.new_type_error(
                             format!("missing required argument: {}", stringify!(#name))
                         )
@@ -235,7 +247,7 @@ fn gen_extraction(
             let t: TokenStream = ty_str.parse().unwrap();
             Ok((
                 quote! {
-                    let #name: u64 = __args.take_positional().ok_or_else(|| {
+                    let #name: u64 = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                         __vm.new_type_error(
                             format!("missing required argument: {}", stringify!(#name))
                         )
@@ -248,7 +260,7 @@ fn gen_extraction(
             let t: TokenStream = ty_str.parse().unwrap();
             Ok((
                 quote! {
-                    let #name: f64 = __args.take_positional().ok_or_else(|| {
+                    let #name: f64 = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                         __vm.new_type_error(
                             format!("missing required argument: {}", stringify!(#name))
                         )
@@ -259,7 +271,7 @@ fn gen_extraction(
         }
         "bool" => Ok((
             quote! {
-                let #name: bool = __args.take_positional().ok_or_else(|| {
+                let #name: bool = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                     __vm.new_type_error(
                         format!("missing required argument: {}", stringify!(#name))
                     )
@@ -269,7 +281,7 @@ fn gen_extraction(
         )),
         "Vec<u8>" => Ok((
             quote! {
-                let #name: ::rustpython_vm::builtins::PyBytesRef = __args.take_positional().ok_or_else(|| {
+                let #name: ::rustpython_vm::builtins::PyBytesRef = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                     __vm.new_type_error(
                         format!("missing required argument: {}", stringify!(#name))
                     )
@@ -281,7 +293,7 @@ fn gen_extraction(
             let bound_name = format_ident!("__bound_{}", name);
             Ok((
                 quote! {
-                    let #name = __args.take_positional().ok_or_else(|| {
+                    let #name = __args.take_positional_keyword(#py_name).ok_or_else(|| {
                         __vm.new_type_error(
                             format!("missing required argument: {}", stringify!(#name))
                         )
@@ -300,7 +312,7 @@ fn gen_extraction(
                                                     let #name = match <#t as ::pyo3::FromPyObject>::extract_bound(
                                                         &::pyo3::Bound::from_object(
                                                             ::pyo3::Python::from_vm(__vm),
-                                                            __args.take_positional().ok_or_else(|| {
+                                                            __args.take_positional_keyword(#py_name).ok_or_else(|| {
                 __vm.new_type_error(format!("missing required argument: {}", stringify!(#name)))
                                                             })?
                                                         )
@@ -321,13 +333,14 @@ fn gen_option_extraction(
     name: &syn::Ident,
     _arg_index: &mut usize,
 ) -> Result<(TokenStream, TokenStream)> {
+    let py_name = name.to_string();
     // Option<&Bound<'_, T>>
     if let Some(bound_inner) = inner.strip_prefix("&") {
         if bound_inner.contains("Bound") {
             let bound_name = format_ident!("__bound_{}", name);
             return Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #bound_name = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) {
@@ -348,7 +361,7 @@ fn gen_option_extraction(
             let inner_t: TokenStream = bound_inner.parse().unwrap();
             return Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #name: Option<#inner_t> = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) {
@@ -367,7 +380,7 @@ fn gen_option_extraction(
         let t: TokenStream = bound_inner.parse().unwrap();
         return Ok((
             quote! {
-                let #name = __args.take_positional();
+                let #name = __args.take_positional_keyword(#py_name);
                 let #name: Option<&#t> = match #name {
                     Some(__obj) => {
                         if __vm.is_none(&__obj) {
@@ -389,7 +402,7 @@ fn gen_option_extraction(
     match inner {
         "u8" => Ok((
             quote! {
-                let #name = __args.take_positional();
+                let #name = __args.take_positional_keyword(#py_name);
                 let #name: Option<u8> = match #name {
                     Some(__obj) => {
                         if __vm.is_none(&__obj) { None }
@@ -402,7 +415,7 @@ fn gen_option_extraction(
         )),
         "u16" => Ok((
             quote! {
-                let #name = __args.take_positional();
+                let #name = __args.take_positional_keyword(#py_name);
                 let #name: Option<u16> = match #name {
                     Some(__obj) => {
                         if __vm.is_none(&__obj) { None }
@@ -415,7 +428,7 @@ fn gen_option_extraction(
         )),
         "u32" => Ok((
             quote! {
-                let #name = __args.take_positional();
+                let #name = __args.take_positional_keyword(#py_name);
                 let #name: Option<u32> = match #name {
                     Some(__obj) => {
                         if __vm.is_none(&__obj) { None }
@@ -430,7 +443,7 @@ fn gen_option_extraction(
             let t: TokenStream = inner.parse().unwrap();
             Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #name: Option<#t> = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }
@@ -446,7 +459,7 @@ fn gen_option_extraction(
             let t: TokenStream = inner.parse().unwrap();
             Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #name: Option<#t> = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }
@@ -462,7 +475,7 @@ fn gen_option_extraction(
             let t: TokenStream = inner.parse().unwrap();
             Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #name: Option<#t> = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }
@@ -476,7 +489,7 @@ fn gen_option_extraction(
         }
         "bool" => Ok((
             quote! {
-                let #name = __args.take_positional();
+                let #name = __args.take_positional_keyword(#py_name);
                 let #name: Option<bool> = match #name {
                     Some(__obj) => {
                         if __vm.is_none(&__obj) { None }
@@ -489,7 +502,7 @@ fn gen_option_extraction(
         )),
         "String" => Ok((
             quote! {
-                let #name = __args.take_positional();
+                let #name = __args.take_positional_keyword(#py_name);
                 let #name: Option<String> = match #name {
                     Some(__obj) => {
                         if __vm.is_none(&__obj) { None }
@@ -507,7 +520,7 @@ fn gen_option_extraction(
             let temp_name = format_ident!("__temp_{}", name);
             Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #temp_name: Option<::rustpython_vm::builtins::PyStrRef> = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }
@@ -524,7 +537,7 @@ fn gen_option_extraction(
             let bound_name = format_ident!("__bound_{}", name);
             Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #bound_name = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }
@@ -542,7 +555,7 @@ fn gen_option_extraction(
             let t: TokenStream = inner.parse().unwrap();
             Ok((
                 quote! {
-                    let #name = __args.take_positional();
+                    let #name = __args.take_positional_keyword(#py_name);
                     let #name: Option<#t> = match #name {
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }

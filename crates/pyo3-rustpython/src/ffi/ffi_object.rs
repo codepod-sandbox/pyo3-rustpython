@@ -15,7 +15,7 @@
 use std::mem;
 use std::ptr::NonNull;
 
-use rustpython_vm::{PyObjectRef, VirtualMachine};
+use rustpython_vm::{AsObject, PyObjectRef, VirtualMachine};
 
 use crate::python::Python;
 
@@ -176,6 +176,13 @@ pub unsafe fn PyObject_IsInstance(obj: *mut PyObject, typ: *mut PyObject) -> std
     let obj_ref = ptr_to_pyobject_ref_borrowed(obj);
     let typ_ref = ptr_to_pyobject_ref_borrowed(typ);
     let vm = vm();
+    if let Ok(typ_type) = typ_ref.try_to_ref::<rustpython_vm::builtins::PyType>(vm) {
+        return if obj_ref.class().fast_issubclass(typ_type.as_object()) {
+            1
+        } else {
+            0
+        };
+    }
     match obj_ref.is_instance(&typ_ref, vm) {
         Ok(true) => 1,
         Ok(false) => 0,
@@ -215,9 +222,18 @@ pub unsafe fn PyObject_GetAttr(obj: *mut PyObject, attr_name: *mut PyObject) -> 
     let obj_ref = ptr_to_pyobject_ref_borrowed(obj);
     let name_ref = ptr_to_pyobject_ref_borrowed(attr_name);
     let vm = vm();
-    match vm.call_method(&obj_ref, "__getattr__", (name_ref.clone(),)) {
+    let Ok(name_str) = name_ref
+        .clone()
+        .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyStr>>(vm)
+    else {
+        return std::ptr::null_mut();
+    };
+    match obj_ref.get_attr(&name_str, vm) {
         Ok(val) => pyobject_ref_to_ptr(val),
-        Err(_) => std::ptr::null_mut(),
+        Err(err) => {
+            crate::err::PyErr::from_vm_err(err).restore();
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -242,7 +258,10 @@ pub unsafe fn PyObject_GetAttrString(
     let vm = vm();
     match obj_ref.get_attr(rust_name, vm) {
         Ok(val) => pyobject_ref_to_ptr(val),
-        Err(_) => std::ptr::null_mut(),
+        Err(err) => {
+            crate::err::PyErr::from_vm_err(err).restore();
+            std::ptr::null_mut()
+        }
     }
 }
 

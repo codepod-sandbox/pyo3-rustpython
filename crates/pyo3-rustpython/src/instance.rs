@@ -240,6 +240,56 @@ pub struct Bound<'py, T> {
 }
 
 impl<'py, T> Bound<'py, T> {
+    fn marker_type_matches<U>(&self) -> Option<bool> {
+        let type_name = std::any::type_name::<U>();
+        if type_name.contains("PyType")
+            && type_name.contains("::types::")
+            && !type_name.contains("PyTypeError")
+        {
+            return Some(
+                self.obj
+                    .class()
+                    .fast_issubclass(self.py.vm.ctx.types.type_type),
+            );
+        }
+        if type_name.contains("::types::dict::PyDict") {
+            return Some(
+                self.obj
+                    .class()
+                    .fast_issubclass(self.py.vm.ctx.types.dict_type),
+            );
+        }
+        if type_name.contains("::types::list::PyList") {
+            return Some(
+                self.obj
+                    .class()
+                    .fast_issubclass(self.py.vm.ctx.types.list_type),
+            );
+        }
+        if type_name.contains("::types::tuple::PyTuple") {
+            return Some(
+                self.obj
+                    .class()
+                    .fast_issubclass(self.py.vm.ctx.types.tuple_type),
+            );
+        }
+        if type_name.contains("::types::string::PyString") {
+            return Some(
+                self.obj
+                    .class()
+                    .fast_issubclass(self.py.vm.ctx.types.str_type),
+            );
+        }
+        if type_name.contains("::types::module::PyModule") {
+            return Some(
+                self.obj
+                    .class()
+                    .fast_issubclass(self.py.vm.ctx.types.module_type),
+            );
+        }
+        None
+    }
+
     /// Construct from a raw `PyObjectRef`.
     #[doc(hidden)]
     pub fn from_object(py: Python<'py>, obj: PyObjectRef) -> Self {
@@ -310,18 +360,10 @@ impl<'py, T> Bound<'py, T> {
     pub fn cast_into<U: rustpython_vm::PyPayload>(self) -> crate::PyResult<Bound<'py, U>> {
         let can_cast = if self.obj.downcast_ref::<U>().is_some() {
             true
+        } else if let Some(matches) = self.marker_type_matches::<U>() {
+            matches
         } else {
-            let type_name = std::any::type_name::<U>();
-            if type_name.contains("PyType")
-                && type_name.contains("::types::")
-                && !type_name.contains("PyTypeError")
-            {
-                self.obj
-                    .class()
-                    .fast_issubclass(self.py.vm.ctx.types.type_type)
-            } else {
-                false
-            }
+            false
         };
         if can_cast {
             Ok(Bound {
@@ -342,17 +384,7 @@ impl<'py, T> Bound<'py, T> {
         if this.obj.downcast_ref::<U>().is_some() {
             return true;
         }
-        let type_name = std::any::type_name::<U>();
-        if type_name.contains("PyType")
-            && type_name.contains("::types::")
-            && !type_name.contains("PyTypeError")
-        {
-            this.obj
-                .class()
-                .fast_issubclass(this.py.vm.ctx.types.type_type)
-        } else {
-            false
-        }
+        this.marker_type_matches::<U>().unwrap_or(false)
     }
 
     /// Alias for `unchecked_cast`. Used by some pyo3 code.
@@ -535,6 +567,14 @@ impl<'py, T> Bound<'py, T> {
                 vm.new_type_error("not a mapping"),
             ));
         }
+        if let Some(matches) = self.marker_type_matches::<U>() {
+            if !matches {
+                return Err(crate::PyErr::new_type_error(
+                    self.py,
+                    format!("expected {}, got {}", type_name, self.obj.class().name()),
+                ));
+            }
+        }
         Ok(Bound {
             py: self.py,
             obj: self.obj.clone(),
@@ -703,6 +743,15 @@ impl<'a, 'py> Borrowed<'a, 'py, crate::types::PyAny> {
             return Err(crate::PyErr::from_vm_err(
                 vm.new_type_error("not a mapping"),
             ));
+        }
+        let any_bound = Bound::<crate::types::PyAny>::from_object(self.py, self.obj.clone());
+        if let Some(matches) = any_bound.marker_type_matches::<U>() {
+            if !matches {
+                return Err(crate::PyErr::new_type_error(
+                    self.py,
+                    format!("expected {}, got {}", type_name, self.obj.class().name()),
+                ));
+            }
         }
         Ok(Bound {
             py: self.py,

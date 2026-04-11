@@ -18,7 +18,10 @@ pub unsafe fn PyLong_AsLongLong(obj: *mut PyObject) -> i64 {
     let vm = vm();
     match obj_ref.try_into_value::<i64>(vm) {
         Ok(v) => v,
-        Err(_) => -1,
+        Err(e) => {
+            crate::err::PyErr::from_vm_err(e).restore();
+            -1
+        }
     }
 }
 

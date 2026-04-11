@@ -148,6 +148,7 @@ impl<'py> Bound<'py, PyModule> {
             + crate::Pyo3Accessors,
     {
         let vm = self.py.vm;
+        let name = <T as ::rustpython_vm::class::PyClassDef>::NAME;
 
         // Use PyPayload::class() instead of make_class() directly so that
         // extends= base initialization and fixup_dunder_slots run.
@@ -158,7 +159,6 @@ impl<'py> Bound<'py, PyModule> {
         // Register property accessors for #[pyo3(get)] / #[pyo3(set)] fields.
         T::__pyo3_register_accessors(&vm.ctx, class_static);
 
-        let name = <T as ::rustpython_vm::class::PyClassDef>::NAME;
         let interned = vm.ctx.intern_str(name);
         let class_obj: PyObjectRef = class.into();
         from_vm_result(self.obj.set_attr(interned, class_obj, vm))

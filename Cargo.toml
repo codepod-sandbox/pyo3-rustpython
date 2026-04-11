@@ -9,12 +9,42 @@ members = [
     "examples/jiter",
     "examples/blake3",
     "examples/jsonschema-rs",
-    "examples/jsonschema-dep",
-    "examples/jsonschema-referencing-dep",
 ]
 resolver = "2"
 
+[workspace.package]
+edition = "2021"
+rust-version = "1.83.0"
+authors = ["Sunny <sunny@example.invalid>"]
+repository = "https://github.com/example/pyo3-rustpython"
+license = "MIT"
+
 [workspace.dependencies]
+ahash = { version = "0.8", features = ["serde"] }
 rustpython-vm = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
 rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
 rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+url = "2.5"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -2 }
+module_name_repetitions = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+too_many_arguments = "allow"
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
+empty_drop = "warn"
+empty_structs_with_brackets = "warn"
+exit = "warn"
+get_unwrap = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+rest_pat_in_fully_bound_structs = "warn"

@@ -2,6 +2,16 @@ use pyo3::interp::InterpreterBuilder;
 
 mod extension {
     include!("lib.rs");
+
+    pub fn register_class_attrs(py: pyo3::Python<'_>) -> pyo3::PyResult<()> {
+        let class = Blake3Class::type_object(py);
+        class.as_any().setattr("name", "blake3")?;
+        class.as_any().setattr("digest_size", 32usize)?;
+        class.as_any().setattr("block_size", 64usize)?;
+        class.as_any().setattr("key_size", 32usize)?;
+        class.as_any().setattr("AUTO", -1isize)?;
+        Ok(())
+    }
 }
 
 /// Upstream test vectors embedded at compile time.
@@ -13,6 +23,8 @@ fn main() {
     let interp = builder.add_native_module(module_def).init_stdlib().build();
 
     let exit_code = interp.run(|vm| {
+        extension::register_class_attrs(pyo3::Python::from_vm(vm)).unwrap();
+
         // Inject the test vectors JSON as a global so Python can use it.
         let json_str = vm.ctx.new_str(TEST_VECTORS_JSON);
         let scope = vm.new_scope_with_builtins();

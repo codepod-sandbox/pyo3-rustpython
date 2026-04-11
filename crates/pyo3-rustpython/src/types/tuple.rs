@@ -1,6 +1,6 @@
 use rustpython_vm::{builtins::PyTuple as RpTuple, PyObjectRef};
 
-use crate::{err::PyResult, instance::Bound, python::Python, types::PyAny};
+use crate::{err::PyResult, instance::Bound, python::Python, types::PyAny, ToPyObject};
 
 /// Marker trait for PyTuple methods. This is a compatibility shim for
 /// `pyo3::types::PyTupleMethods`.
@@ -11,15 +11,15 @@ impl<'py> PyTupleMethods<'py> for Bound<'py, PyTuple> {}
 pub struct PyTuple;
 
 impl PyTuple {
-    /// Create a new tuple from items that can be converted to PyObjectRef.
+    /// Create a new tuple from items that can be converted through PyO3's object protocol.
     /// This is the static method form: `PyTuple::new(py, items)`.
     pub fn new<'py, I>(py: Python<'py>, items: I) -> PyResult<Bound<'py, PyTuple>>
     where
         I: IntoIterator,
-        I::Item: Into<PyObjectRef>,
+        I::Item: ToPyObject,
     {
         let vm = py.vm;
-        let elems: Vec<PyObjectRef> = items.into_iter().map(|e| e.into()).collect();
+        let elems: Vec<PyObjectRef> = items.into_iter().map(|e| e.to_object(py).obj).collect();
         let obj: PyObjectRef = vm.ctx.new_tuple(elems).into();
         Ok(Bound::from_object(py, obj))
     }

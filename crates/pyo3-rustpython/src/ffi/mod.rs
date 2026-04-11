@@ -45,11 +45,22 @@ pub unsafe fn Py_False() -> *mut PyObject {
 }
 
 pub unsafe fn PyList_GetSlice(
-    _list: *mut PyObject,
-    _low: Py_ssize_t,
-    _high: Py_ssize_t,
+    list: *mut PyObject,
+    low: Py_ssize_t,
+    high: Py_ssize_t,
 ) -> *mut PyObject {
+    if list.is_null() {
+        return std::ptr::null_mut();
+    }
     let vm = vm();
-    let slice = vm.ctx.new_list(vec![]);
+    let list_ref = ptr_to_pyobject_ref_borrowed(list);
+    let Some(list_inner) = list_ref.downcast_ref::<rustpython_vm::builtins::PyList>() else {
+        return std::ptr::null_mut();
+    };
+    let elements = list_inner.borrow_vec();
+    let len = elements.len() as Py_ssize_t;
+    let start = low.clamp(0, len) as usize;
+    let end = high.clamp(low.max(0), len) as usize;
+    let slice = vm.ctx.new_list(elements[start..end].to_vec());
     pyobject_ref_to_ptr(slice.into())
 }

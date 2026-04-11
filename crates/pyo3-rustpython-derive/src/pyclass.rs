@@ -137,22 +137,31 @@ pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
         quote! {}
     };
 
+    let base_payload_impl = if let Some(ref base_path) = options.extends {
+        quote! {
+            impl ::pyo3::Pyo3BasePayload for #struct_name {
+                type BasePayload = #base_path;
+            }
+        }
+    } else {
+        quote! {
+            impl ::pyo3::Pyo3BasePayload for #struct_name {
+                type BasePayload = ::rustpython_vm::builtins::PyBaseObject;
+            }
+        }
+    };
+
     let base_init = if let Some(ref base_path) = options.extends {
         quote! {
             {
-                eprintln!("[pyclass] base_init for {} extends {:?}", #struct_name_str, stringify!(#base_path));
                 let base_type = <#base_path as ::rustpython_vm::PyPayload>::class(ctx);
                 let child_type = <Self as ::rustpython_vm::class::StaticType>::static_type();
-                eprintln!("[pyclass] base_type name={}, child_type name={}", base_type.name(), child_type.name());
                 *child_type.bases.write() = vec![base_type.to_owned()];
                 let base_mro: Vec<_> = base_type.mro.read().iter().cloned().collect();
-                eprintln!("[pyclass] base_mro len={}", base_mro.len());
                 let new_mro: Vec<_> = ::std::iter::once(child_type.to_owned())
                     .chain(base_mro)
                     .collect();
-                eprintln!("[pyclass] new_mro len={}", new_mro.len());
                 *child_type.mro.write() = new_mro;
-                eprintln!("[pyclass] after write, mro={:?}", child_type.mro.read().iter().map(|c| c.name().to_string()).collect::<Vec<_>>());
             }
         }
     } else {
@@ -197,6 +206,7 @@ pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
         }
 
         #from_py_object_impl
+        #base_payload_impl
 
         #accessor_impl
     })
@@ -413,6 +423,10 @@ pub fn expand_enum(attr: TokenStream, mut input: ItemEnum) -> Result<TokenStream
                 _ctx: &::rustpython_vm::Context,
                 _class: &'static ::rustpython_vm::Py<::rustpython_vm::builtins::PyType>,
             ) {}
+        }
+
+        impl ::pyo3::Pyo3BasePayload for #enum_name {
+            type BasePayload = ::rustpython_vm::builtins::PyBaseObject;
         }
     })
 }

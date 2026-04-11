@@ -240,22 +240,22 @@ impl<'py, T: FromPyObject<'py>> FromPyObject<'py> for Vec<T> {
     }
 }
 
-impl<'py, T: IntoPyObject<'py>> IntoPyObject<'py> for Vec<T> {
+impl<'py, T> IntoPyObject<'py> for Vec<T>
+where
+    T: IntoPyObject<'py>,
+    T::Error: Into<PyErr>,
+{
     type Target = PyAny;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
         let vm = py.vm;
-        let elements: Vec<PyObjectRef> = self
-            .into_iter()
-            .map(|item| {
-                item.into_pyobject(py)
-                    .map(|b| b.into_any().obj)
-                    .map_err(Into::into)
-            })
-            .collect::<Result<_, PyErr>>()?;
-        let list_obj: PyObjectRef = vm.ctx.new_list(elements).into();
-        Ok(new_bound(py, list_obj))
+        let mut elements = Vec::with_capacity(self.len());
+        for item in self {
+            elements.push(item.into_pyobject(py).map_err(Into::into)?.into_any().obj);
+        }
+        let obj: PyObjectRef = vm.ctx.new_list(elements).into();
+        Ok(new_bound(py, obj))
     }
 }
 

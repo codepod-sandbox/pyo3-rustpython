@@ -9,6 +9,7 @@
 
 use rustpython_vm::{
     builtins::{PyStr, PyType},
+    common::hash::{fix_sentinel, hash_bigint},
     function::{Either, FuncArgs, PyComparisonValue},
     protocol::{PyIterReturn, PyMapping, PySequence},
     types::PyComparisonOp,
@@ -21,6 +22,68 @@ pub fn fixup_dunder_slots(class: &'static Py<PyType>, ctx: &Context) {
     let attrs = class.attributes.read();
 
     drop(attrs); // release read lock before storing slots
+
+    // Mirror safe slot aliases back to their real dunder names so the
+    // existing slot wiring below can discover them.
+    for dunder in [
+        "__repr__",
+        "__str__",
+        "__hash__",
+        "__iter__",
+        "__next__",
+        "__eq__",
+        "__ne__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
+        "__richcmp__",
+        "__and__",
+        "__or__",
+        "__sub__",
+        "__xor__",
+        "__add__",
+        "__mul__",
+        "__truediv__",
+        "__floordiv__",
+        "__mod__",
+        "__pow__",
+        "__lshift__",
+        "__rshift__",
+        "__matmul__",
+        "__neg__",
+        "__pos__",
+        "__abs__",
+        "__invert__",
+        "__int__",
+        "__float__",
+        "__bool__",
+        "__iadd__",
+        "__isub__",
+        "__imul__",
+        "__iand__",
+        "__ior__",
+        "__ixor__",
+        "__contains__",
+        "__len__",
+        "__getitem__",
+        "__setitem__",
+        "__delitem__",
+        "__reversed__",
+        "__reduce__",
+        "__call__",
+    ] {
+        let alias_name = format!("_pyo3_slot_{dunder}");
+        let slot_fn = {
+            class.attributes
+                .read()
+                .get(ctx.intern_str(alias_name.as_str()))
+                .cloned()
+        };
+        if let Some(slot_fn) = slot_fn {
+            class.set_str_attr(dunder, slot_fn, ctx);
+        }
+    }
 
     // __repr__ / __str__
     if class
@@ -153,7 +216,11 @@ fn hash_wrapper(zelf: &PyObject, vm: &VirtualMachine) -> PyResult<i64> {
     let py_int = ret
         .downcast_ref::<PyInt>()
         .ok_or_else(|| vm.new_type_error("__hash__ method should return an integer"))?;
-    py_int.try_to_primitive::<i64>(vm)
+    let bigint = py_int.as_bigint();
+    Ok(bigint
+        .try_into()
+        .map(fix_sentinel)
+        .unwrap_or_else(|_| hash_bigint(bigint)))
 }
 
 fn iter_wrapper(zelf: PyObjectRef, vm: &VirtualMachine) -> PyResult {

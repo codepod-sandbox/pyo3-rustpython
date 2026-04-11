@@ -18,9 +18,16 @@ pub unsafe fn PyUnicode_AsUTF8AndSize(obj: *mut PyObject, size: *mut Py_ssize_t)
         return std::ptr::null();
     }
     let obj_ref = ptr_to_pyobject_ref_borrowed(obj);
+    let vm = vm();
     match obj_ref.downcast_ref::<rustpython_vm::builtins::PyStr>() {
         Some(s) => {
-            let st = s.as_str();
+            let st = match s.try_as_utf8(vm) {
+                Ok(st) => st.as_str(),
+                Err(err) => {
+                    crate::err::PyErr::from_vm_err(err).restore();
+                    return std::ptr::null();
+                }
+            };
             if !size.is_null() {
                 *size = st.len() as Py_ssize_t;
             }

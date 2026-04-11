@@ -20,6 +20,10 @@ impl PyDict {
 }
 
 impl<'py> Bound<'py, PyDict> {
+    pub fn new(py: Python<'py>) -> Bound<'py, PyDict> {
+        PyDict::new(py)
+    }
+
     pub fn new_bound(py: Python<'py>) -> Bound<'py, PyDict> {
         PyDict::new(py)
     }

@@ -36,6 +36,10 @@ impl PyInt {
 }
 
 impl<'py> Bound<'py, PyBool> {
+    pub fn new(py: Python<'py>, val: bool) -> Bound<'py, PyBool> {
+        PyBool::new(py, val)
+    }
+
     pub fn new_bound(py: Python<'py>, val: bool) -> Bound<'py, PyBool> {
         PyBool::new(py, val)
     }
@@ -47,6 +51,10 @@ impl<'py> Bound<'py, PyBool> {
 }
 
 impl<'py> Bound<'py, PyFloat> {
+    pub fn new(py: Python<'py>, val: f64) -> Bound<'py, PyFloat> {
+        PyFloat::new(py, val)
+    }
+
     pub fn new_bound(py: Python<'py>, val: f64) -> Bound<'py, PyFloat> {
         PyFloat::new(py, val)
     }

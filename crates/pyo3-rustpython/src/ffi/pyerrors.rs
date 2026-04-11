@@ -6,6 +6,7 @@
 //! by ffi-heavy serialization code; the safe PyO3 API paths don't use them.
 
 use super::ffi_object::*;
+use rustpython_vm::AsObject;
 
 /// Fetch the currently raised exception (Python 3.12+ API).
 ///
@@ -15,10 +16,12 @@ use super::ffi_object::*;
 /// Must be called with the GIL held.
 #[inline]
 pub unsafe fn PyErr_GetRaisedException() -> *mut PyObject {
-    // TODO: implement via rustpython_vm internal access or sys.exc_info()
-    // The exception state is pub(crate) in rustpython_vm.
-    // For now, return null (no exception).
-    std::ptr::null_mut()
+    crate::err::take_current_exception()
+        .map(|exc| {
+            let obj: rustpython_vm::PyObjectRef = exc.into();
+            pyobject_ref_to_ptr(obj)
+        })
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// Fetch the current exception as (type, value, traceback).
@@ -33,16 +36,30 @@ pub unsafe fn PyErr_Fetch(
     exc_value: *mut *mut PyObject,
     exc_tb: *mut *mut PyObject,
 ) {
-    if !exc_type.is_null() {
-        *exc_type = std::ptr::null_mut();
+    let current = crate::err::take_current_exception();
+    if let Some(exc) = current {
+        let exc_type_obj: rustpython_vm::PyObjectRef = exc.class().to_owned().into();
+        let exc_value_obj: rustpython_vm::PyObjectRef = exc.into();
+        if !exc_type.is_null() {
+            *exc_type = pyobject_ref_to_ptr(exc_type_obj);
+        }
+        if !exc_value.is_null() {
+            *exc_value = pyobject_ref_to_ptr(exc_value_obj);
+        }
+        if !exc_tb.is_null() {
+            *exc_tb = std::ptr::null_mut();
+        }
+    } else {
+        if !exc_type.is_null() {
+            *exc_type = std::ptr::null_mut();
+        }
+        if !exc_value.is_null() {
+            *exc_value = std::ptr::null_mut();
+        }
+        if !exc_tb.is_null() {
+            *exc_tb = std::ptr::null_mut();
+        }
     }
-    if !exc_value.is_null() {
-        *exc_value = std::ptr::null_mut();
-    }
-    if !exc_tb.is_null() {
-        *exc_tb = std::ptr::null_mut();
-    }
-    // TODO: implement via rustpython_vm internal access
 }
 
 /// Clear the current exception indicator.
@@ -51,5 +68,5 @@ pub unsafe fn PyErr_Fetch(
 /// Must be called with the GIL held.
 #[inline]
 pub unsafe fn PyErr_Clear() {
-    // TODO: implement via rustpython_vm internal access
+    crate::err::set_current_exception(None);
 }

@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "jsonschema_rs"
+name = "jsonschema_rs_harness"
+path = "src/harness_stub.rs"
 
 [dependencies]
-jsonschema = { path = "../jsonschema-dep", features = ["arbitrary-precision"] }
+jsonschema_rs = { package = "jsonschema-py", path = "../../third_party/jsonschema-rs/crates/jsonschema-py" }
 pyo3 = { package = "pyo3-rustpython", path = "../../crates/pyo3-rustpython" }
 rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893", default-features = false, features = ["stdlib", "freeze-stdlib", "encodings"] }
 rustpython-vm = { workspace = true }

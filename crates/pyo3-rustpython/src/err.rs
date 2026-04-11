@@ -6,6 +6,16 @@ thread_local! {
     static CURRENT_EXCEPTION: RefCell<Option<PyRef<PyBaseException>>> = RefCell::new(None);
 }
 
+pub(crate) fn take_current_exception() -> Option<PyRef<PyBaseException>> {
+    CURRENT_EXCEPTION.with(|cell| cell.borrow_mut().take())
+}
+
+pub(crate) fn set_current_exception(exc: Option<PyRef<PyBaseException>>) {
+    CURRENT_EXCEPTION.with(|cell| {
+        *cell.borrow_mut() = exc;
+    });
+}
+
 /// A Python exception. Analogous to PyO3's `PyErr`.
 pub struct PyErr {
     pub(crate) inner: PyRef<PyBaseException>,
@@ -104,29 +114,34 @@ impl PyErr {
 
     pub fn fetch<'py>(py: crate::Python<'py>) -> Self {
         let vm = py.vm;
-        CURRENT_EXCEPTION.with(|cell| {
-            cell.borrow_mut()
-                .take()
-                .map(PyErr::from_vm_err)
-                .unwrap_or_else(|| PyErr {
-                    inner: vm.new_exception_msg(
-                        vm.ctx.exceptions.exception_type.to_owned(),
-                        "PyErr::fetch: no current exception".into(),
-                    ),
-                })
-        })
+        take_current_exception()
+            .map(PyErr::from_vm_err)
+            .unwrap_or_else(|| PyErr {
+                inner: vm.new_exception_msg(
+                    vm.ctx.exceptions.exception_type.to_owned(),
+                    "PyErr::fetch: no current exception".into(),
+                ),
+            })
     }
 
     pub fn restore(self) {
-        CURRENT_EXCEPTION.with(|cell| {
-            *cell.borrow_mut() = Some(self.inner);
-        });
+        set_current_exception(Some(self.inner));
     }
 }
 
 impl std::fmt::Display for PyErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.inner.as_object())
+        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::Python::attach(|py| {
+                let obj: rustpython_vm::PyObjectRef = self.inner.clone().into();
+                crate::Bound::<crate::types::PyAny>::from_object(py, obj).try_to_string()
+            })
+        }));
+
+        match rendered {
+            Ok(Ok(text)) => write!(f, "{text}"),
+            _ => write!(f, "{:?}", self.inner.as_object()),
+        }
     }
 }
 

@@ -121,6 +121,10 @@ pub trait Pyo3Accessors {
     );
 }
 
+pub trait Pyo3BasePayload {
+    type BasePayload: rustpython_vm::PyPayload;
+}
+
 #[doc(hidden)]
 pub struct SyncModuleDefPtr(pub *const rustpython_vm::builtins::PyModuleDef);
 unsafe impl Sync for SyncModuleDefPtr {}
