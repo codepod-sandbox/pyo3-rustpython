@@ -22,9 +22,9 @@ license = "MIT"
 
 [workspace.dependencies]
 ahash = { version = "0.8", features = ["serde"] }
-rustpython-vm = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
-rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
-rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893" }
+rustpython-vm = { git = "https://github.com/RustPython/RustPython", rev = "d201c48e1" }
+rustpython-derive = { git = "https://github.com/RustPython/RustPython", rev = "d201c48e1" }
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "d201c48e1" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 url = "2.5"

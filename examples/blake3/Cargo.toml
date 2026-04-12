@@ -12,5 +12,5 @@ pyo3 = { package = "pyo3-rustpython", path = "../../crates/pyo3-rustpython" }
 blake3 = { version = "1.5", features = ["mmap", "rayon"] }
 hex = "0.4"
 rayon = "1.11"
-rustpython = { git = "https://github.com/RustPython/RustPython", rev = "f9ca63893", default-features = false, features = ["stdlib", "freeze-stdlib", "encodings"] }
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "d201c48e1", default-features = false, features = ["stdlib", "freeze-stdlib", "encodings"] }
 rustpython-vm = { workspace = true }
