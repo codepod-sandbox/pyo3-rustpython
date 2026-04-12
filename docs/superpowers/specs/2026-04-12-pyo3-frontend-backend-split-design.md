@@ -42,6 +42,11 @@ This direction is also consistent with RustPython maintainers' prior interest in
 - Requiring new dependencies for the core architectural split unless later proven unavoidable.
 - Solving packaging, wheel building, or distribution concerns in the first architectural PR beyond what is needed to validate the new backend model.
 
+Clarification:
+
+- preserving current PyO3 package compatibility on the CPython backend is a goal
+- guaranteeing that all CPython-coupled crates work unchanged on RustPython from day one is not
+
 ## Design Principles
 
 ### 1. Frontend Semantics Must Be Backend-Neutral
@@ -88,6 +93,19 @@ The project may significantly change internal contracts between macros and runti
 ### 5. Avoid New Global Dependencies
 
 The split should avoid adding new always-on dependencies that affect PyO3 as a whole unless they are clearly necessary. In particular, the design should not assume `inventory` or similar registration crates as the first solution.
+
+### 6. Preserve Existing CPython-Backed PyO3 Behavior
+
+The split must not reduce compatibility for the existing PyO3 ecosystem on the CPython backend.
+
+That includes not only the idealized documented surface, but also important de facto behavior that real packages rely on today because PyO3 is currently implemented against CPython semantics.
+
+This means:
+
+- existing PyO3 crates that work on the CPython backend today should continue to work after the split
+- CPython-coupled behavior may remain CPython-backend-specific
+- RustPython may initially support a narrower subset
+- the architecture split itself must not turn current CPython-compatible crates into regressions
 
 ## Target Architecture
 
@@ -252,12 +270,15 @@ Suggested boundary areas:
 The architecture should support:
 
 - unchanged PyO3 user syntax for portable PyO3 features
+- unchanged behavior for existing CPython-backed PyO3 crates on the CPython backend
 - meaningful portions of PyO3's own upstream tests against unchanged test sources
 - progressively more complex real packages running on RustPython
 
 The architecture should not claim:
 
 - unchanged support for crates that depend on CPython object layout or undocumented ABI details through `pyo3::ffi`
+
+Those crates remain part of PyO3's effective compatibility surface on the CPython backend and must not be regressed there by the split.
 
 Those cases should be explicitly treated as outside the first-class portable surface unless PyO3 later chooses to formalize them.
 
@@ -290,6 +311,7 @@ Those cases should be explicitly treated as outside the first-class portable sur
 ### Phase 5: Validation Ladder
 
 - PyO3 upstream compile and runtime tests
+- regression checks for existing CPython-backed package behavior
 - existing package ladder already proven useful:
   - `blake3`
   - `rpds`
@@ -310,11 +332,17 @@ The suite should be classified as:
 - portable/frontend tests that must pass through the backend split
 - backend-specific or ABI-specific tests that may remain CPython-only and must be documented as such
 
-### 2. Existing Real Packages
+### 2. CPython-Backend Regression Validation
+
+Use existing PyO3 behavior as a compatibility bar for the CPython backend, including de facto behavior used by real crates.
+
+The refactor is not acceptable if it makes previously working CPython-backed PyO3 crates stop working.
+
+### 3. Existing Real Packages
 
 Continue validating against real upstream packages using sub-repositories and forks for legitimate upstream portability fixes.
 
-### 3. Architectural Hygiene
+### 4. Architectural Hygiene
 
 Review whether new code respects the split:
 
@@ -350,6 +378,7 @@ Mitigation:
 
 - preserve the CPython backend as the reference implementation
 - keep CPython-path validation in every phase
+- explicitly treat existing package compatibility on CPython as a release-blocking requirement for the architectural PR
 
 ### Risk 4: ABI-Dependent Packages Blur The Goal
 
@@ -375,6 +404,7 @@ The architecture effort should produce:
 This design is successful when all of the following are true:
 
 - PyO3 fork compiles and runs with CPython through the new backend boundary
+- existing CPython-backed PyO3 package behavior is not regressed by the split
 - RustPython works as a real backend rather than a sidecar compat layer
 - unchanged PyO3 upstream tests cover meaningful frontend semantics on the RustPython backend
 - plain `#[pyclass]` works without requiring `#[pymethods]`
