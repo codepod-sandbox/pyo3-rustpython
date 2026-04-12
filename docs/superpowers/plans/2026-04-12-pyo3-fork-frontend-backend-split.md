@@ -130,7 +130,6 @@ git commit -m "chore: add PyO3 fork workspace"
 
 **Files:**
 - Modify: `examples/pyo3-tests/Cargo.toml`
-- Modify: `third_party/pyo3-fork/Cargo.toml`
 - Test: `cargo test -p pyo3-tests --test test_inheritance --no-run`
 - Test: `cargo test -p pyo3-tests --test test_pyfunction --no-run`
 
