@@ -18,13 +18,15 @@ uuid = { version = "1", features = ["v4"] }
 [lib]
 path = "src/lib.rs"
 
+# Upstream tests are sourced from `third_party/pyo3` until the fork reaches parity.
+# Once the fork carries the architecture split, switch these paths to `third_party/pyo3-fork/tests/...`.
 [[test]]
 name = "test_pyfunction"
 path = "../../third_party/pyo3/tests/test_pyfunction.rs"
 
 [[test]]
 name = "test_inheritance"
-path = "tests/test_inheritance.rs"
+path = "../../third_party/pyo3/tests/test_inheritance.rs"
 
 [[test]]
 name = "test_mapping"
