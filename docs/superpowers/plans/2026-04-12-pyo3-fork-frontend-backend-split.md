@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Refactor a fork of PyO3 so frontend macro semantics are separated from backend runtime realization, preserve CPython compatibility, and add a RustPython backend in the same fork.
+**Goal:** Refactor a fork of PyO3 so frontend macro semantics are separated from backend runtime realization, preserve CPython-family compatibility, and add a RustPython backend in the same fork.
 
-**Architecture:** Work in a dedicated PyO3 fork checkout under `third_party/pyo3-fork`. Introduce a backend boundary in PyO3 itself, move macro lowering toward backend-neutral semantic specs, preserve CPython as the reference backend, and add RustPython as the motivating backend. Use unchanged upstream PyO3 tests as the primary guardrail and package-level validation as the secondary guardrail. Validation must target the fork directly; `pyo3-rustpython` is reference material only and not part of the new dependency path.
+**Architecture:** Work in a dedicated PyO3 fork checkout under `third_party/pyo3-fork`. Introduce a backend boundary in PyO3 itself, move macro lowering toward backend-neutral semantic specs, preserve a CPython-family backend as the reference backend, and add RustPython as the motivating backend. Use unchanged upstream PyO3 tests as the primary guardrail and package-level validation as the secondary guardrail. Validation must target the fork directly; `pyo3-rustpython` is reference material only and not part of the new dependency path.
 
 **Tech Stack:** Rust, Cargo workspaces, PyO3 fork, `pyo3-macros-backend`, `pyo3-ffi`, RustPython, unchanged upstream PyO3 tests, local package ladder (`blake3`, `rpds`, `jiter`, `jsonschema-rs`).
 
@@ -641,6 +641,29 @@ Expected: PASS for the CPython fork suite or fail only on explicitly unfinished 
 ```bash
 git -C third_party/pyo3-fork add src/backend/cpython.rs src/backend/tests.rs src/err/mod.rs src/instance.rs src/type_object.rs
 git -C third_party/pyo3-fork commit -m "refactor: preserve CPython backend through backend boundary"
+```
+
+### Task 8.5: Preserve PyPy / GraalPy Design Constraints
+
+**Files:**
+- Modify: `third_party/pyo3-fork/Cargo.toml`
+- Modify: `third_party/pyo3-fork/pyo3-build-config/src/lib.rs`
+- Test: `cargo check --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3-build-config`
+
+- [ ] **Step 1: Record the design intent in code comments or docs near runtime selection**
+
+Clarify that the reference backend is CPython-family, not CPython-only, and that existing `PyPy` / `GraalPy` cfg handling remains in scope for that backend.
+
+- [ ] **Step 2: Verify existing config support still compiles**
+
+Run: `cargo check --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3-build-config`
+Expected: PASS
+
+- [ ] **Step 3: Commit**
+
+```bash
+git -C third_party/pyo3-fork add Cargo.toml pyo3-build-config/src/lib.rs
+git -C third_party/pyo3-fork commit -m "docs: clarify CPython-family backend scope"
 ```
 
 ### Task 9: Add The RustPython Backend Skeleton In The Fork

@@ -17,7 +17,7 @@ The end state should support this claim:
 - PyO3 frontend semantics are backend-independent.
 - CPython remains the reference backend.
 - RustPython is a real backend, not a sidecar compatibility layer.
-- The design is generic enough that additional backends such as PyPy or GraalPy can fit the same architecture, even if they continue to share CPython-oriented paths initially.
+- The design is generic enough that additional runtimes such as PyPy or GraalPy fit the same architecture, even if they continue to share a CPython-family backend path initially.
 
 ## Motivation
 
@@ -165,12 +165,25 @@ The backend interface must be expressive enough that:
 
 ## CPython Backend
 
-The current PyO3 behavior should be re-expressed as the CPython backend.
+The current PyO3 behavior should be re-expressed as the CPython-family backend.
 
 This is not just for preservation. It is the reference backend that validates the split:
 
 - existing PyO3 behavior should continue to work through the backend contract
 - the backend contract is incomplete if the CPython path requires bypasses everywhere
+
+For the first architectural PR, this backend should continue to cover:
+
+- CPython
+- PyPy
+- GraalPy
+
+The reason is practical: PyO3 already contains broad PyPy and GraalPy support through build-configuration, ffi symbol differences, and runtime capability gating. Those runtimes are important design constraints, but they do not yet justify a separate backend implementation in the first slice the way RustPython does.
+
+So the immediate goal is not “one backend per runtime.” It is:
+
+- one CPython-family backend which preserves existing PyO3 behavior across the currently supported interpreter family
+- one RustPython backend which proves the boundary can support a truly different runtime model
 
 ## RustPython Backend
 
@@ -187,6 +200,21 @@ That backend must cover enough surface to validate the architecture, including:
 - enough ffi to support meaningful real packages and upstream tests
 
 The backend should not attempt to paper over raw CPython ABI layout assumptions. Function-level ffi compatibility belongs in scope. ABI layout emulation does not.
+
+## PyPy And GraalPy In The Design
+
+PyPy and GraalPy should influence the boundary design from the start, even if they are not separate backend implementations in the initial fork.
+
+What that means:
+
+- the CPython-family backend must not accidentally hard-code assumptions that are only valid for CPython and already known to vary on PyPy or GraalPy
+- the split must preserve the existing `#[cfg(PyPy)]`, `#[cfg(GraalPy)]`, and related ffi/build-config behavior
+- validation should include at least compile-time or configuration-level checks that the backend refactor does not erase those existing runtime distinctions
+
+What it does not mean:
+
+- building a distinct PyPy backend before the RustPython backend exists
+- re-architecting around “one backend per currently supported runtime” in the first PR
 
 ## Internal Representation
 
