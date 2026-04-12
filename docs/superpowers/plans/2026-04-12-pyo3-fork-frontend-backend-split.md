@@ -189,6 +189,8 @@ git commit -m "test: lock current PyO3 upstream failing gates"
 - Modify: `third_party/pyo3-fork/src/lib.rs`
 - Test: `cargo check --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3`
 
+**Prerequisite:** if `third_party/pyo3-fork` is still an empty fork repository, first seed it from upstream `PyO3/pyo3` so the fork checkout contains the real PyO3 source tree before adding backend modules.
+
 - [ ] **Step 1: Write the failing compile hook**
 
 Create a minimal reference in `third_party/pyo3-fork/src/lib.rs` before the modules exist:
