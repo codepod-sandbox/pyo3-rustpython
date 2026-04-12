@@ -4,7 +4,7 @@
 
 **Goal:** Refactor a fork of PyO3 so frontend macro semantics are separated from backend runtime realization, preserve CPython compatibility, and add a RustPython backend in the same fork.
 
-**Architecture:** Work in a dedicated PyO3 fork checkout under `third_party/pyo3-fork`. Introduce a backend boundary in PyO3 itself, move macro lowering toward backend-neutral semantic specs, preserve CPython as the reference backend, and add RustPython as the motivating backend. Use unchanged upstream PyO3 tests as the primary guardrail and package-level validation as the secondary guardrail.
+**Architecture:** Work in a dedicated PyO3 fork checkout under `third_party/pyo3-fork`. Introduce a backend boundary in PyO3 itself, move macro lowering toward backend-neutral semantic specs, preserve CPython as the reference backend, and add RustPython as the motivating backend. Use unchanged upstream PyO3 tests as the primary guardrail and package-level validation as the secondary guardrail. Validation must target the fork directly; `pyo3-rustpython` is reference material only and not part of the new dependency path.
 
 **Tech Stack:** Rust, Cargo workspaces, PyO3 fork, `pyo3-macros-backend`, `pyo3-ffi`, RustPython, unchanged upstream PyO3 tests, local package ladder (`blake3`, `rpds`, `jiter`, `jsonschema-rs`).
 
@@ -53,10 +53,9 @@
 - Modify: `third_party/pyo3-fork/pyo3-ffi/src/modsupport.rs`
 - Modify: `third_party/pyo3-fork/pyo3-build-config/src/lib.rs`
 
-### Validation / Harness Files In This Repo
+### Validation Files
 
-- Modify: `examples/pyo3-tests/Cargo.toml`
-- Modify: `examples/pyo3-tests/tests/test_utils/mod.rs`
+- Modify: `third_party/pyo3-fork/Cargo.toml`
 - Modify: `docs/upstream-packages.md`
 - Modify: `docs/superpowers/specs/2026-04-12-pyo3-frontend-backend-split-design.md`
 - Create: `docs/superpowers/plans/2026-04-12-pyo3-fork-frontend-backend-split.md`
@@ -129,9 +128,8 @@ git commit -m "chore: add PyO3 fork workspace"
 ### Task 2: Add Failing Upstream Gates In The Fork
 
 **Files:**
-- Modify: `examples/pyo3-tests/Cargo.toml`
-- Test: `cargo test -p pyo3-tests --test test_inheritance --no-run`
-- Test: `cargo test -p pyo3-tests --test test_pyfunction --no-run`
+- Test: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run`
+- Test: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run`
 
 - [ ] **Step 1: Record the two failing upstream gates**
 
@@ -139,10 +137,10 @@ Use these exact gates as red tests:
 
 ```text
 Gate A:
-cargo test -p pyo3-tests --test test_inheritance --no-run
+cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run
 
 Gate B:
-cargo test -p pyo3-tests --test test_pyfunction --no-run
+cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run
 ```
 
 The expected failing diagnostics at this stage include:
@@ -154,30 +152,23 @@ E0277: the trait bound `MyClass: PyClassImpl` is not satisfied
 
 - [ ] **Step 2: Run the failing inheritance gate**
 
-Run: `cargo test -p pyo3-tests --test test_inheritance --no-run --message-format short`
+Run: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run --message-format short`
 Expected: FAIL with `SubclassAble: PyClassImpl`
 
 - [ ] **Step 3: Run the failing pyfunction gate**
 
-Run: `cargo test -p pyo3-tests --test test_pyfunction --no-run --message-format short`
+Run: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run --message-format short`
 Expected: FAIL with plain `#[pyclass]` `PyClassImpl` errors
 
-- [ ] **Step 4: Wire the fork path into local notes only**
+- [ ] **Step 4: Record that validation is direct on the fork**
 
-Add a short comment to `examples/pyo3-tests/Cargo.toml` to make the plan execution obvious:
-
-```toml
-# Upstream tests are sourced from `third_party/pyo3` until the fork reaches parity.
-# Once the fork carries the architecture split, switch these paths to `third_party/pyo3-fork/tests/...`.
-```
-
-Do not switch to fork tests yet.
+Use the fork's own unchanged upstream tests as the source of truth. Do not route these gates through `pyo3-rustpython` or a shim-backed local harness.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add examples/pyo3-tests/Cargo.toml
-git commit -m "test: lock current PyO3 upstream failing gates"
+git add docs/superpowers/specs/2026-04-12-pyo3-frontend-backend-split-design.md docs/superpowers/plans/2026-04-12-pyo3-fork-frontend-backend-split.md
+git commit -m "docs: reset validation to run directly on PyO3 fork"
 ```
 
 ### Task 3: Introduce Backend Contracts In The Fork
@@ -379,16 +370,16 @@ git -C third_party/pyo3-fork commit -m "refactor: add backend-neutral macro spec
 - Modify: `third_party/pyo3-fork/src/impl_/pyclass.rs`
 - Modify: `third_party/pyo3-fork/src/impl_/pyclass_init.rs`
 - Modify: `third_party/pyo3-fork/src/pyclass.rs`
-- Test: `cargo test -p pyo3-tests --test test_inheritance --no-run`
-- Test: `cargo test -p pyo3-tests --test test_pyfunction --no-run`
+- Test: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run`
+- Test: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run`
 
 - [ ] **Step 1: Keep the failing upstream class gates visible**
 
 Run:
 
 ```bash
-cargo test -p pyo3-tests --test test_inheritance --no-run --message-format short
-cargo test -p pyo3-tests --test test_pyfunction --no-run --message-format short
+cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run --message-format short
+cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run --message-format short
 ```
 
 Expected:
@@ -450,12 +441,12 @@ Where `FrontendMethodInventory` returns `&[]` for method-less classes.
 
 - [ ] **Step 5: Run inheritance compile gate**
 
-Run: `cargo test -p pyo3-tests --test test_inheritance --no-run --message-format short`
+Run: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run --message-format short`
 Expected: PASS or move past `SubclassAble: PyClassImpl`
 
 - [ ] **Step 6: Run pyfunction compile gate**
 
-Run: `cargo test -p pyo3-tests --test test_pyfunction --no-run --message-format short`
+Run: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run --message-format short`
 Expected: only non-plain-`#[pyclass]` failures remain
 
 - [ ] **Step 7: Commit**
@@ -472,7 +463,7 @@ git commit -m "refactor: make pyclass independent of pymethods"
 - Modify: `third_party/pyo3-fork/pyo3-macros-backend/src/pymethod.rs`
 - Modify: `third_party/pyo3-fork/src/impl_/pymethods.rs`
 - Modify: `third_party/pyo3-fork/src/impl_/pyclass.rs`
-- Test: `cargo test -p pyo3-tests --test test_inheritance --no-run`
+- Test: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run`
 
 - [ ] **Step 1: Write the failing additive inventory expectation**
 
@@ -519,7 +510,7 @@ In `src/impl_/pymethods.rs` and `src/impl_/pyclass.rs`, attach methods/getters/s
 
 - [ ] **Step 5: Run inheritance compile gate**
 
-Run: `cargo test -p pyo3-tests --test test_inheritance --no-run --message-format short`
+Run: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_inheritance --no-run --message-format short`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -536,7 +527,7 @@ git commit -m "refactor: make pymethods additive over pyclass"
 - Modify: `third_party/pyo3-fork/src/impl_/pyfunction.rs`
 - Modify: `third_party/pyo3-fork/src/types/module.rs`
 - Modify: `third_party/pyo3-fork/src/lib.rs`
-- Test: `cargo test -p pyo3-tests --test test_pyfunction --no-run`
+- Test: `cargo test --manifest-path third_party/pyo3-fork/Cargo.toml -p pyo3 --test test_pyfunction --no-run`
 
 - [ ] **Step 1: Keep the imported-name wrapping gate red**
 

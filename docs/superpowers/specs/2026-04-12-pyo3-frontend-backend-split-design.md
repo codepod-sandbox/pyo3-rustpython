@@ -6,6 +6,8 @@ Accepted for implementation planning.
 
 This spec supersedes the direction in [2026-04-02-pyo3-rustpython-backend-design.md](/Users/sunny/work/codepod/pyo3-rustpython/docs/superpowers/specs/2026-04-02-pyo3-rustpython-backend-design.md). The project is no longer "build a compatibility fork here and upstream later." The correct path is to fork PyO3 itself, perform the architectural split there, and add RustPython as a first-class motivating backend on top of that split.
 
+The existing `pyo3-rustpython` implementation in this repository remains useful as reference material only. It is a source of experiments, working ideas, and code we may port deliberately into the fork, but it is not part of the target dependency graph for the upstreamable architecture.
+
 ## Goal
 
 Refactor PyO3 so its user-facing semantics and proc-macro frontend are separated from runtime-specific backend implementation details, then prove the split by keeping the existing CPython backend and adding a RustPython backend in the same fork.
@@ -46,6 +48,18 @@ Clarification:
 
 - preserving current PyO3 package compatibility on the CPython backend is a goal
 - guaranteeing that all CPython-coupled crates work unchanged on RustPython from day one is not
+- continuing to validate the fork through the old `pyo3-rustpython` crate is not acceptable once fork-backed validation exists
+
+## Validation Reset
+
+Validation for this project must measure the fork directly.
+
+That means:
+
+- unchanged upstream PyO3 tests must compile and run directly in `third_party/pyo3-fork`
+- `pyo3-rustpython` may still be consulted for ideas or prior fixes, but it must not sit on the validation path for the new architecture
+
+This reset is important because otherwise the project can appear to make progress while still testing the legacy shim instead of the new PyO3 fork.
 
 ## Design Principles
 
