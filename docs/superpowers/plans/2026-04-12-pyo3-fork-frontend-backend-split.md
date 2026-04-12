@@ -91,7 +91,7 @@ Expected: exit code `1`
 Create the fork checkout and add a short architecture note:
 
 ```bash
-git submodule add git@github.com:codepod-sandbox/pyo3.git third_party/pyo3-fork
+git submodule add https://github.com/codepod-sandbox/pyo3.git third_party/pyo3-fork
 ```
 
 Write `third_party/pyo3-fork/docs/backend-architecture.md`:
@@ -800,4 +800,3 @@ git commit -m "test: validate local gates against PyO3 fork"
 - backend modules are consistently named `src/backend/{mod,traits,cpython,rustpython,spec}.rs`
 - frontend semantic traits are consistently named `FrontendClassSpec` and `FrontendMethodInventory`
 - validation commands consistently target `third_party/pyo3-fork` or the local `pyo3-tests` harness
-
