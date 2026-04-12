@@ -14,7 +14,7 @@
 - reason: assumes CPython object layout through `pyo3::ffi`, outside the portable PyO3 abstraction we want to support on RustPython
 - proposed change: use `PyDict_Size` instead of raw field access
 - status: validated locally; this patch takes the upstream-subrepository harness from `25 passed, 1 failed` to `26 passed, 0 failed`
-- PR: pending
+- PR: merged upstream as `Stranger6667/jsonschema#1109`
 
 ### Patch 2: RustPython-only bootstrap stubs carried by the old copied snapshot
 
@@ -29,3 +29,4 @@
 
 - The current local `examples/jsonschema-rs` tree is a stale copied snapshot and should be removed once the harness points at `third_party/jsonschema-rs`.
 - Package-source fixes must live in the sub-repository branch history, not under `examples/`.
+- `Patch 1` is now merged upstream, which validates the package-portability lane: when a crate relies on CPython-specific ffi layout assumptions, the right answer can be an upstream portability PR rather than shim bloat.
