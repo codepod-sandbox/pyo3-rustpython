@@ -12,7 +12,7 @@ on spawned-thread interpreter execution will hit the same runtime bug.
 
 ## Environment
 
-- RustPython checkout: local cargo git checkout pinned at `d201c48e1`
+- RustPython checkout: local cargo git checkout pinned at `7e637e8cbd37a7ef01c5b0b0152d94ec82f323b2`
 - Reproduced with bare RustPython embedding, not only through PyO3
 
 ## Minimal Rust repro

@@ -1,15 +1,17 @@
 # RustPython weakref semantics blocker
 
-Upstream issue: https://github.com/RustPython/RustPython/issues/7589
+Upstream history:
+- `RustPython/RustPython#7589` was resolved by merged PR `RustPython/RustPython#7590`
+- that fixed the missing `ReferenceType.__callback__` property
+- the remaining weakref tail is narrower and is now mostly proxy / generic-upgrade semantics
 
 Current state in the PyO3 RustPython backend:
 - switching from stdlib `weakref` to built-in `_weakref` removes the embedded import-recursion blocker
 - `PyWeakrefReference::upgrade()` works in isolated cases
 - the remaining weakref failures are now semantic mismatches in RustPython weakref behavior rather than generic backend bring-up
 
-Observed gaps:
-- `ReferenceType.__callback__` behavior does not match CPython / PyO3 expectations
+Observed remaining gaps:
 - generic `PyWeakref` upgrade paths do not uniformly recover referents across reference/proxy cases
 - proxy weakref behavior still diverges for both Python classes and PyO3 pyclasses
 
-The affected PyO3 tests are currently marked ignored under `PyRustPython` and should be revisited once RustPython/RustPython#7589 is fixed.
+After repinning to RustPython `7e637e8cbd37a7ef01c5b0b0152d94ec82f323b2`, Python-class `PyWeakrefReference` behavior is now green again. The remaining ignored PyO3 tests should be revisited as a separate upstream weakref follow-up, not under `#7589`.
