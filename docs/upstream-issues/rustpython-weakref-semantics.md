@@ -3,15 +3,15 @@
 Upstream history:
 - `RustPython/RustPython#7589` was resolved by merged PR `RustPython/RustPython#7590`
 - that fixed the missing `ReferenceType.__callback__` property
-- the remaining weakref tail is narrower and is now mostly proxy / generic-upgrade semantics
+- that was only part of the full PyO3 weakref surface
 
-Current state in the PyO3 RustPython backend:
-- switching from stdlib `weakref` to built-in `_weakref` removes the embedded import-recursion blocker
-- `PyWeakrefReference::upgrade()` works in isolated cases
-- the remaining weakref failures are now semantic mismatches in RustPython weakref behavior rather than generic backend bring-up
+Current state:
+- the PyO3 RustPython backend no longer has a local weakref blocker
+- `types::weakref` is green under `runtime-rustpython`
+- the remaining weakref-related ignores in the fork, if any, should be treated as part of the separate embedded import-recursion family, not this issue
 
-Observed remaining gaps:
-- generic `PyWeakref` upgrade paths do not uniformly recover referents across reference/proxy cases
-- proxy weakref behavior still diverges for both Python classes and PyO3 pyclasses
-
-After repinning to RustPython `7e637e8cbd37a7ef01c5b0b0152d94ec82f323b2`, Python-class `PyWeakrefReference` behavior is now green again. The remaining ignored PyO3 tests should be revisited as a separate upstream weakref follow-up, not under `#7589`.
+Resolution notes:
+- switching from stdlib `weakref` to built-in `_weakref` removed the import-recursion coupling
+- RustPython proxy support was extended to distinguish plain vs callable proxies
+- the RustPython backend now recovers proxy referents through proxy-owned accessors
+- RustPython type `repr` handling was adjusted so PyO3-created builtins-rooted heap types keep the expected module-qualified representation without changing ordinary Python heap types
