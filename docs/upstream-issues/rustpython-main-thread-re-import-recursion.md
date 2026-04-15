@@ -45,6 +45,11 @@ It blocks:
 - `pyo3::err::tests::warnings`
 - any RustPython backend path which relies on `re`
 - lazy stdlib behavior inside `warnings`
+- `tests/test_proto_methods.rs::sequence` through `collections -> _collections_abc -> abc`
+- `tests/test_proto_methods.rs::{test_await,test_anext_aiter}` through embedded `asyncio` startup/import recursion
+- `tests/test_sequence.rs::sequence_is_not_mapping` through embedded `collections.abc.Mapping` import recursion
+- `tests/test_pyerr_debug_unformattable.rs` through embedded `unittest.mock -> unittest.case` import recursion
+- `tests/test_various.rs::test_pickle` through embedded `pickle -> functools -> abc` import recursion
 
 ## Current handling
 

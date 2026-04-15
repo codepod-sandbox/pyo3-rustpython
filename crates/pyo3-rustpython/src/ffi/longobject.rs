@@ -33,3 +33,10 @@ pub unsafe fn PyLong_AsLongLong(obj: *mut PyObject) -> i64 {
 pub unsafe fn PyLong_AsSsize_t(obj: *mut PyObject) -> Py_ssize_t {
     PyLong_AsLongLong(obj) as Py_ssize_t
 }
+
+#[inline]
+pub unsafe fn PyLong_FromLong(v: std::os::raw::c_long) -> *mut PyObject {
+    let vm = vm();
+    let obj: rustpython_vm::PyObjectRef = vm.ctx.new_int(v as i64).into();
+    pyobject_ref_to_ptr(obj)
+}

@@ -10,6 +10,7 @@ pub trait Element: Copy + 'static {}
 
 impl Element for u8 {}
 impl Element for i8 {}
+impl Element for i32 {}
 
 /// A typed buffer wrapping a Python bytes-like object.
 ///
@@ -63,5 +64,28 @@ impl<T: Element> PyBuffer<T> {
     /// Whether the buffer is C-contiguous. Always true for our copied buffer.
     pub fn is_c_contiguous(&self) -> bool {
         true
+    }
+
+    pub fn as_slice(&self, _py: crate::Python<'_>) -> crate::PyResult<&[std::cell::Cell<T>]> {
+        let ptr = self.data.as_ptr() as *const std::cell::Cell<T>;
+        let len = self.data.len() / std::mem::size_of::<T>();
+        Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+    }
+
+    pub fn as_mut_slice(
+        &self,
+        _py: crate::Python<'_>,
+    ) -> crate::PyResult<&[std::cell::Cell<T>]> {
+        let ptr = self.data.as_ptr() as *const std::cell::Cell<T>;
+        let len = self.data.len() / std::mem::size_of::<T>();
+        Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+    }
+}
+
+impl<'py, T: Element> crate::FromPyObject<'py> for PyBuffer<T> {
+    fn extract_bound(
+        ob: &crate::Bound<'py, crate::types::PyAny>,
+    ) -> crate::PyResult<Self> {
+        Self::get(ob)
     }
 }

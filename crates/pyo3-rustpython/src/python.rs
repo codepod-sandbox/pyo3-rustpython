@@ -1,9 +1,23 @@
+use rustpython::InterpreterBuilderExt;
 use rustpython_vm::VirtualMachine;
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 
 thread_local! {
     static CURRENT_VM: Cell<Option<*const VirtualMachine>> = const { Cell::new(None) };
+    static EMBEDDED_INTERPRETER: OnceCell<&'static rustpython_vm::Interpreter> = const { OnceCell::new() };
+}
+
+fn with_vm_bound<'py, F, R>(vm: &'py VirtualMachine, f: F) -> R
+where
+    F: FnOnce(Python<'py>) -> R,
+{
+    CURRENT_VM.with(|cell| {
+        let prev = cell.replace(Some(vm as *const VirtualMachine));
+        let result = f(Python { vm });
+        cell.set(prev);
+        result
+    })
 }
 
 #[derive(Copy, Clone)]
@@ -31,11 +45,20 @@ impl<'py> Python<'py> {
         F: for<'p> FnOnce(Python<'p>) -> R,
     {
         CURRENT_VM.with(|cell| {
-            let ptr = cell
-                .get()
-                .expect("Python::with_gil called outside RustPython interpreter context");
-            let vm = unsafe { &*ptr };
-            f(Python { vm })
+            if let Some(ptr) = cell.get() {
+                let vm = unsafe { &*ptr };
+                f(Python { vm })
+            } else {
+                EMBEDDED_INTERPRETER.with(|interp| {
+                    interp
+                        .get_or_init(|| {
+                            Box::leak(Box::new(
+                                rustpython::InterpreterBuilder::new().init_stdlib().build(),
+                            ))
+                        })
+                        .enter(|vm| with_vm_bound(vm, f))
+                })
+            }
         })
     }
 
@@ -95,24 +118,16 @@ impl<'py> Python<'py> {
     pub fn run(
         self,
         code: impl PyCodeInput,
-        globals: Option<&crate::Bound<'py, crate::types::PyDict>>,
-        locals: Option<&crate::Bound<'py, crate::types::PyDict>>,
+        globals: Option<&dyn PyDictArg<'py>>,
+        locals: Option<&dyn PyDictArg<'py>>,
     ) -> crate::PyResult<()> {
         let vm = self.vm;
         let source = code.to_source();
         let globals_dict = globals
-            .map(|d| {
-                d.obj.clone()
-                    .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>>(vm)
-                    .expect("Borrowed<PyDict> must wrap a dict")
-            })
+            .map(|d| d.as_dict_ref(vm))
             .unwrap_or_else(|| vm.ctx.new_dict());
         let locals_mapping = locals
-            .map(|d| {
-                d.obj.clone()
-                    .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>>(vm)
-                    .expect("Bound<PyDict> must wrap a dict")
-            })
+            .map(|d| d.as_dict_ref(vm))
             .map(rustpython_vm::function::ArgMapping::from_dict_exact);
         let scope = rustpython_vm::scope::Scope::with_builtins(locals_mapping, globals_dict, vm);
         crate::err::from_vm_result(vm.run_string(scope, &source, "<embedded>".to_owned()))
@@ -124,6 +139,37 @@ impl<'py> Python<'py> {
     pub fn is_truthy(self, obj: &crate::Bound<'py, crate::types::PyAny>) -> crate::PyResult<bool> {
         let vm = self.vm;
         crate::err::from_vm_result(obj.obj.clone().try_to_bool(vm))
+    }
+}
+
+pub trait PyDictArg<'py> {
+    fn as_dict_ref(
+        &self,
+        vm: &rustpython_vm::VirtualMachine,
+    ) -> rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>;
+}
+
+impl<'py> PyDictArg<'py> for crate::Bound<'py, crate::types::PyDict> {
+    fn as_dict_ref(
+        &self,
+        vm: &rustpython_vm::VirtualMachine,
+    ) -> rustpython_vm::PyRef<rustpython_vm::builtins::PyDict> {
+        self.obj
+            .clone()
+            .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>>(vm)
+            .expect("Bound<PyDict> must wrap a dict")
+    }
+}
+
+impl<'a, 'py> PyDictArg<'py> for crate::Borrowed<'a, 'py, crate::types::PyDict> {
+    fn as_dict_ref(
+        &self,
+        vm: &rustpython_vm::VirtualMachine,
+    ) -> rustpython_vm::PyRef<rustpython_vm::builtins::PyDict> {
+        self.obj
+            .clone()
+            .try_into_value::<rustpython_vm::PyRef<rustpython_vm::builtins::PyDict>>(vm)
+            .expect("Borrowed<PyDict> must wrap a dict")
     }
 }
 

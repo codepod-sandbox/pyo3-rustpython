@@ -22,14 +22,17 @@ impl<'py> Bound<'py, PyString> {
             .obj
             .downcast_ref::<RpStr>()
             .expect("Bound<PyString> must wrap a str");
-        Ok(pystr.as_str())
+        Ok(pystr.try_as_utf8(self.py.vm)?.as_str())
     }
 
     /// Extract the string value, replacing invalid data with the Unicode
     /// replacement character.
     pub fn to_string_lossy(&self) -> String {
         match self.obj.downcast_ref::<RpStr>() {
-            Some(pystr) => pystr.as_str().to_owned(),
+            Some(pystr) => match pystr.try_as_utf8(self.py.vm) {
+                Ok(pystr) => pystr.as_str().to_owned(),
+                Err(_) => pystr.as_wtf8().to_string(),
+            },
             None => String::from("<invalid str>"),
         }
     }

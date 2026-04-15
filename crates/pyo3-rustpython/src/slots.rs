@@ -12,9 +12,17 @@ use rustpython_vm::{
     common::hash::{fix_sentinel, hash_bigint},
     function::{Either, FuncArgs, PyComparisonValue},
     protocol::{PyIterReturn, PyMapping, PySequence},
-    types::PyComparisonOp,
+    types::{PyComparisonOp, PyTypeSlots},
     Context, Py, PyObject, PyObjectRef, PyResult, VirtualMachine,
 };
+
+macro_rules! merge_opt {
+    ($dst:expr, $src:expr) => {
+        if let Some(value) = $src {
+            $dst.store(Some(value));
+        }
+    };
+}
 
 /// Detect dunder methods on a class and wire them to the corresponding
 /// type slots. Should be called after `make_class` for user-defined types.
@@ -165,6 +173,30 @@ pub fn fixup_dunder_slots(class: &'static Py<PyType>, ctx: &Context) {
             .store(Some(map_subscript_wrapper));
     }
 
+    if class
+        .attributes
+        .read()
+        .contains_key(ctx.intern_str("__setitem__"))
+    {
+        class
+            .slots
+            .as_mapping
+            .ass_subscript
+            .store(Some(map_ass_subscript_wrapper));
+    }
+
+    if class
+        .attributes
+        .read()
+        .contains_key(ctx.intern_str("__delitem__"))
+    {
+        class
+            .slots
+            .as_mapping
+            .ass_subscript
+            .store(Some(map_ass_subscript_wrapper));
+    }
+
     // __contains__ → sequence.contains
     if class
         .attributes
@@ -186,6 +218,118 @@ pub fn fixup_dunder_slots(class: &'static Py<PyType>, ctx: &Context) {
     {
         class.slots.call.store(Some(call_wrapper));
     }
+}
+
+pub fn apply_inventory_slots(
+    class: &'static Py<PyType>,
+    extend_slots: fn(&mut PyTypeSlots),
+) {
+    let mut inventory_slots = PyTypeSlots::heap_default();
+    extend_slots(&mut inventory_slots);
+    merge_type_slots(class, &inventory_slots);
+}
+
+fn merge_type_slots(class: &'static Py<PyType>, inventory_slots: &PyTypeSlots) {
+    merge_opt!(class.slots.hash, inventory_slots.hash.load());
+    merge_opt!(class.slots.call, inventory_slots.call.load());
+    merge_opt!(class.slots.vectorcall, inventory_slots.vectorcall.load());
+    merge_opt!(class.slots.str, inventory_slots.str.load());
+    merge_opt!(class.slots.repr, inventory_slots.repr.load());
+    merge_opt!(class.slots.getattro, inventory_slots.getattro.load());
+    merge_opt!(class.slots.setattro, inventory_slots.setattro.load());
+    merge_opt!(class.slots.richcompare, inventory_slots.richcompare.load());
+    merge_opt!(class.slots.iter, inventory_slots.iter.load());
+    merge_opt!(class.slots.iternext, inventory_slots.iternext.load());
+    merge_opt!(class.slots.descr_get, inventory_slots.descr_get.load());
+    merge_opt!(class.slots.descr_set, inventory_slots.descr_set.load());
+    merge_opt!(class.slots.init, inventory_slots.init.load());
+    merge_opt!(class.slots.alloc, inventory_slots.alloc.load());
+    merge_opt!(class.slots.new, inventory_slots.new.load());
+    merge_opt!(class.slots.del, inventory_slots.del.load());
+
+    merge_sequence_slots(&class.slots.as_sequence, &inventory_slots.as_sequence);
+    merge_mapping_slots(&class.slots.as_mapping, &inventory_slots.as_mapping);
+    merge_number_slots(&class.slots.as_number, &inventory_slots.as_number);
+
+    let _ = inventory_slots;
+}
+
+fn merge_sequence_slots(
+    dst: &rustpython_vm::protocol::PySequenceSlots,
+    src: &rustpython_vm::protocol::PySequenceSlots,
+) {
+    merge_opt!(dst.length, src.length.load());
+    merge_opt!(dst.concat, src.concat.load());
+    merge_opt!(dst.repeat, src.repeat.load());
+    merge_opt!(dst.item, src.item.load());
+    merge_opt!(dst.ass_item, src.ass_item.load());
+    merge_opt!(dst.contains, src.contains.load());
+    merge_opt!(dst.inplace_concat, src.inplace_concat.load());
+    merge_opt!(dst.inplace_repeat, src.inplace_repeat.load());
+}
+
+fn merge_mapping_slots(
+    dst: &rustpython_vm::protocol::PyMappingSlots,
+    src: &rustpython_vm::protocol::PyMappingSlots,
+) {
+    merge_opt!(dst.length, src.length.load());
+    merge_opt!(dst.subscript, src.subscript.load());
+    merge_opt!(dst.ass_subscript, src.ass_subscript.load());
+}
+
+fn merge_number_slots(
+    dst: &rustpython_vm::protocol::PyNumberSlots,
+    src: &rustpython_vm::protocol::PyNumberSlots,
+) {
+    merge_opt!(dst.add, src.add.load());
+    merge_opt!(dst.subtract, src.subtract.load());
+    merge_opt!(dst.multiply, src.multiply.load());
+    merge_opt!(dst.remainder, src.remainder.load());
+    merge_opt!(dst.divmod, src.divmod.load());
+    merge_opt!(dst.power, src.power.load());
+    merge_opt!(dst.negative, src.negative.load());
+    merge_opt!(dst.positive, src.positive.load());
+    merge_opt!(dst.absolute, src.absolute.load());
+    merge_opt!(dst.boolean, src.boolean.load());
+    merge_opt!(dst.invert, src.invert.load());
+    merge_opt!(dst.lshift, src.lshift.load());
+    merge_opt!(dst.rshift, src.rshift.load());
+    merge_opt!(dst.and, src.and.load());
+    merge_opt!(dst.xor, src.xor.load());
+    merge_opt!(dst.or, src.or.load());
+    merge_opt!(dst.int, src.int.load());
+    merge_opt!(dst.float, src.float.load());
+    merge_opt!(dst.right_add, src.right_add.load());
+    merge_opt!(dst.right_subtract, src.right_subtract.load());
+    merge_opt!(dst.right_multiply, src.right_multiply.load());
+    merge_opt!(dst.right_remainder, src.right_remainder.load());
+    merge_opt!(dst.right_divmod, src.right_divmod.load());
+    merge_opt!(dst.right_power, src.right_power.load());
+    merge_opt!(dst.right_lshift, src.right_lshift.load());
+    merge_opt!(dst.right_rshift, src.right_rshift.load());
+    merge_opt!(dst.right_and, src.right_and.load());
+    merge_opt!(dst.right_xor, src.right_xor.load());
+    merge_opt!(dst.right_or, src.right_or.load());
+    merge_opt!(dst.inplace_add, src.inplace_add.load());
+    merge_opt!(dst.inplace_subtract, src.inplace_subtract.load());
+    merge_opt!(dst.inplace_multiply, src.inplace_multiply.load());
+    merge_opt!(dst.inplace_remainder, src.inplace_remainder.load());
+    merge_opt!(dst.inplace_power, src.inplace_power.load());
+    merge_opt!(dst.inplace_lshift, src.inplace_lshift.load());
+    merge_opt!(dst.inplace_rshift, src.inplace_rshift.load());
+    merge_opt!(dst.inplace_and, src.inplace_and.load());
+    merge_opt!(dst.inplace_xor, src.inplace_xor.load());
+    merge_opt!(dst.inplace_or, src.inplace_or.load());
+    merge_opt!(dst.floor_divide, src.floor_divide.load());
+    merge_opt!(dst.true_divide, src.true_divide.load());
+    merge_opt!(dst.right_floor_divide, src.right_floor_divide.load());
+    merge_opt!(dst.right_true_divide, src.right_true_divide.load());
+    merge_opt!(dst.inplace_floor_divide, src.inplace_floor_divide.load());
+    merge_opt!(dst.inplace_true_divide, src.inplace_true_divide.load());
+    merge_opt!(dst.index, src.index.load());
+    merge_opt!(dst.matrix_multiply, src.matrix_multiply.load());
+    merge_opt!(dst.right_matrix_multiply, src.right_matrix_multiply.load());
+    merge_opt!(dst.inplace_matrix_multiply, src.inplace_matrix_multiply.load());
 }
 
 // ─── slot wrappers ────────────────────────────────────────────────────────────
@@ -272,6 +416,31 @@ fn map_subscript_wrapper(mapping: PyMapping<'_>, key: &PyObject, vm: &VirtualMac
         rustpython_vm::identifier!(vm, __getitem__),
         (key.to_owned(),),
     )
+}
+
+fn map_ass_subscript_wrapper(
+    mapping: PyMapping<'_>,
+    key: &PyObject,
+    value: Option<PyObjectRef>,
+    vm: &VirtualMachine,
+) -> PyResult<()> {
+    match value {
+        Some(value) => {
+            vm.call_special_method(
+                mapping.obj,
+                rustpython_vm::identifier!(vm, __setitem__),
+                (key.to_owned(), value),
+            )?;
+        }
+        None => {
+            vm.call_special_method(
+                mapping.obj,
+                rustpython_vm::identifier!(vm, __delitem__),
+                (key.to_owned(),),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn seq_contains_wrapper(

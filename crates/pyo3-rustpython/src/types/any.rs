@@ -205,6 +205,16 @@ impl<'py> Bound<'py, PyAny> {
         method.call(args, kwargs)
     }
 
+    pub fn add(
+        &self,
+        other: impl crate::conversion::ToPyObject,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let vm = self.py.vm;
+        let other_obj = other.to_object(self.py).obj;
+        let result = from_vm_result(vm._add(&self.obj, &other_obj))?;
+        Ok(Bound::from_object(self.py, result))
+    }
+
     // -----------------------------------------------------------------------
     // Type operations
     // -----------------------------------------------------------------------
@@ -338,7 +348,9 @@ impl<'py> Bound<'py, PyAny> {
     pub fn try_to_string(&self) -> PyResult<String> {
         let vm = self.py.vm;
         let str_val = from_vm_result(self.obj.str(vm))?;
-        Ok(str_val.as_str().to_string())
+        Ok(
+            from_vm_result(str_val.try_as_utf8(vm).map(|s| s.as_str().to_string()))?,
+        )
     }
 }
 

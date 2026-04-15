@@ -62,6 +62,14 @@ impl<'py> Bound<'py, PyTuple> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn iter(&self) -> BoundTupleIterator<'py> {
+        BoundTupleIterator {
+            len: self.len(),
+            tuple: self.clone(),
+            index: 0,
+        }
+    }
 }
 
 /// Iterator over elements of a `Bound<'py, PyTuple>`.

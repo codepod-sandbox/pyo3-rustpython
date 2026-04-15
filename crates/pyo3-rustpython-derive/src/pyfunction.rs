@@ -7,6 +7,7 @@ pub fn expand(attr: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
     let fn_name = &input.sig.ident;
     let mut fn_name_str = fn_name.to_string();
     let wrapper_name = format_ident!("__pyo3_fn_{}", fn_name);
+    let symbol_wrapper_name = format_ident!("__pyo3_wrap_symbol_{}", fn_name);
 
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
@@ -89,6 +90,16 @@ pub fn expand(attr: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
             let __callable = __heap_def.build_function(__vm);
             ::pyo3::Bound::from_object(__py, __callable.into())
         }
+
+        #[doc(hidden)]
+        #[unsafe(no_mangle)]
+        pub extern "Rust" fn #symbol_wrapper_name(
+            __py: ::pyo3::Python<'_>,
+        ) -> ::rustpython_vm::PyObjectRef {
+            let __bound = #wrapper_name(__py);
+            let __obj: ::rustpython_vm::PyObjectRef = __bound.into_any().into();
+            __obj
+        }
     })
 }
 
@@ -110,14 +121,19 @@ fn return_handling(ret: &ReturnType) -> (TokenStream, TokenStream) {
                         quote! { -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> },
                         quote! { __result.map(|_| __vm.ctx.none()).map_err(::pyo3::err::into_vm_err) },
                     ),
-                    "bool" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
-                    | "usize" | "f32" | "f64" | "String" => (
-                        quote! { -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> },
-                        quote! { __result.map(|v| ::rustpython_vm::convert::ToPyObject::to_pyobject(v, __vm)).map_err(::pyo3::err::into_vm_err) },
-                    ),
                     _ => (
                         quote! { -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> },
-                        quote! { __result.map(|v| ::rustpython_vm::convert::ToPyObject::to_pyobject(v, __vm)).map_err(::pyo3::err::into_vm_err) },
+                        quote! {
+                            __result
+                                .and_then(|v| {
+                                    ::pyo3::IntoPyObject::into_pyobject(v, ::pyo3::Python::from_vm(__vm))
+                                        .map(|b| {
+                                            let obj: ::rustpython_vm::PyObjectRef = b.into_any().into();
+                                            obj
+                                        })
+                                })
+                                .map_err(::pyo3::err::into_vm_err)
+                        },
                     ),
                 }
             } else {
@@ -128,7 +144,14 @@ fn return_handling(ret: &ReturnType) -> (TokenStream, TokenStream) {
                     ),
                     _ => (
                         quote! { -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> },
-                        quote! { Ok(::rustpython_vm::convert::ToPyObject::to_pyobject(__result, __vm)) },
+                        quote! {
+                            ::pyo3::IntoPyObject::into_pyobject(__result, ::pyo3::Python::from_vm(__vm))
+                                .map(|b| {
+                                    let obj: ::rustpython_vm::PyObjectRef = b.into_any().into();
+                                    obj
+                                })
+                                .map_err(::pyo3::err::into_vm_err)
+                        },
                     ),
                 }
             }
@@ -176,6 +199,7 @@ fn gen_extraction(
 
     // For &Bound<'_, T> parameters — extract PyObjectRef, wrap in Bound, pass reference
     if let Some(inner) = ty_str.strip_prefix("&") {
+        let inner = strip_leading_lifetime(inner);
         if inner.contains("Bound") {
             let bound_name = format_ident!("__bound_{}", name);
             return Ok((
@@ -363,13 +387,37 @@ fn take_from_py_with_attr(attrs: &mut Vec<Attribute>) -> Result<Option<TokenStre
             if meta.path.is_ident("from_py_with") {
                 let value = meta.value()?;
                 let expr: syn::Expr = value.parse()?;
-                from_py_with = Some(quote! { #expr });
+                let rendered = quote! { #expr }.to_string();
+                let compact = rendered.replace(' ', "");
+                if compact.contains("Bound<'_,_>") && compact.contains("PyAnyMethods>::len") {
+                    from_py_with = Some(
+                        quote! { <::pyo3::Bound<'_, ::pyo3::types::PyAny> as ::pyo3::types::PyAnyMethods>::len }
+                    );
+                } else {
+                    from_py_with = Some(quote! { #expr });
+                }
             }
             Ok(())
         });
         false
     });
     Ok(from_py_with)
+}
+
+fn strip_leading_lifetime(mut s: &str) -> &str {
+    if !s.starts_with('\'') {
+        return s;
+    }
+    let mut idx = 1usize;
+    for ch in s[1..].chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' {
+            idx += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    s = &s[idx..];
+    s.trim_start()
 }
 
 /// Generate extraction for Option<T> parameters.

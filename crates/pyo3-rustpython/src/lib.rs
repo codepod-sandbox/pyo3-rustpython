@@ -134,6 +134,21 @@ pub trait Pyo3BasePayload {
 }
 
 #[doc(hidden)]
+pub struct Pyo3ClassItems {
+    pub methods: &'static [rustpython_vm::function::PyMethodDef],
+    pub extend_class:
+        fn(&rustpython_vm::Context, &'static rustpython_vm::Py<rustpython_vm::builtins::PyType>),
+    pub extend_slots: fn(&mut rustpython_vm::types::PyTypeSlots),
+}
+
+#[doc(hidden)]
+pub trait Pyo3ClassInventory: inventory::Collect {
+    fn items(&'static self) -> &'static Pyo3ClassItems;
+}
+
+pub use inventory;
+
+#[doc(hidden)]
 pub struct SyncModuleDefPtr(pub *const rustpython_vm::builtins::PyModuleDef);
 unsafe impl Sync for SyncModuleDefPtr {}
 unsafe impl Send for SyncModuleDefPtr {}
@@ -257,7 +272,8 @@ pub mod prelude {
     pub use crate::python::Python;
     pub use crate::types::{
         PyAny, PyAnyMethods, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyIterator, PyList, PyLong,
-        PyMapping, PyModule, PyNone, PySet, PyString, PyTuple, PyTupleMethods, PyType,
+        PyCFunction, PyDateTime, PyFunction, PyMapping, PyModule, PyNone, PySet, PyString,
+        PyTuple, PyTupleMethods, PyType,
         PyTypeMethods,
     };
     pub use crate::wrap_pyfunction;
@@ -273,27 +289,49 @@ pub mod prelude {
 macro_rules! wrap_pyfunction {
     ($func:ident, $module:expr) => {
         $crate::paste! {
-            Ok::<_, $crate::PyErr>([<__pyo3_fn_ $func>]($module.py()))
+            unsafe {
+                extern "Rust" {
+                    fn [<__pyo3_wrap_symbol_ $func>](__py: $crate::Python<'_>) -> ::rustpython_vm::PyObjectRef;
+                }
+                let __obj = [<__pyo3_wrap_symbol_ $func>]($module.py());
+                Ok::<_, $crate::PyErr>($crate::Bound::<$crate::types::PyAny>::from_object($module.py(), __obj))
+            }
         }
     };
     ($func:ident) => {
         $crate::paste! {
-            |__py| Ok::<_, $crate::PyErr>([<__pyo3_fn_ $func>](__py))
+            {
+                fn __wrap<'py>(__py: $crate::Python<'py>) -> Result<$crate::Bound<'py, $crate::types::PyAny>, $crate::PyErr> {
+                    unsafe {
+                        extern "Rust" {
+                            fn [<__pyo3_wrap_symbol_ $func>](__py: $crate::Python<'_>) -> ::rustpython_vm::PyObjectRef;
+                        }
+                        let __obj = [<__pyo3_wrap_symbol_ $func>](__py);
+                        Ok($crate::Bound::<$crate::types::PyAny>::from_object(__py, __obj))
+                    }
+                }
+                __wrap
+            }
         }
     };
     ($mod:ident :: $func:ident, $module:expr) => {
-        $crate::paste! {
-            Ok::<_, $crate::PyErr>($mod::[<__pyo3_fn_ $func>]($module.py()))
-        }
+        $crate::wrap_pyfunction!($func, $module)
     };
     ($a:ident :: $b:ident :: $func:ident, $module:expr) => {
-        $crate::paste! {
-            Ok::<_, $crate::PyErr>($a::$b::[<__pyo3_fn_ $func>]($module.py()))
-        }
+        $crate::wrap_pyfunction!($func, $module)
     };
     (crate :: $mod:ident :: $func:ident, $module:expr) => {
-        $crate::paste! {
-            Ok::<_, $crate::PyErr>(crate::$mod::[<__pyo3_fn_ $func>]($module.py()))
+        $crate::wrap_pyfunction!($func, $module)
+    };
+}
+
+#[macro_export]
+macro_rules! wrap_pymodule {
+    ($module:ident) => {
+        |__py| {
+            let __module = $crate::types::PyModule::new(__py, stringify!($module)).unwrap();
+            $module(&__module).unwrap();
+            __module.into_any()
         }
     };
 }
@@ -310,7 +348,7 @@ macro_rules! py_run {
     }};
     ($py:expr, $($val:ident)+, $code:expr) => {{
         use $crate::types::IntoPyDict;
-        let __dict = [$((stringify!($val), &$val),)+].into_py_dict($py).unwrap();
+        let __dict = [$((stringify!($val), $crate::ToPyObject::to_object(&$val, $py)),)+].into_py_dict($py).unwrap();
         $crate::py_run!($py, *__dict, $code)
     }};
 }

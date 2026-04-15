@@ -7,10 +7,12 @@ use syn::{
 
 pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
     let self_ty = &input.self_ty;
+    let inventory_class_name = inventory_class_name(self_ty)?;
 
     let mut has_new = false;
     let mut new_method: Option<ImplItemFn> = None;
     let mut transformed_items: Vec<TokenStream> = Vec::new();
+    let mut outer_items: Vec<TokenStream> = Vec::new();
     let mut classattr_consts: Vec<TokenStream> = Vec::new();
 
     for item in &input.items {
@@ -111,8 +113,12 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
                 transformed_items.push(wrapper);
             } else {
                 let slot_name = format_ident!("_pyo3_slot_{}", fn_name_str);
-                let wrapper = generate_slot_method_wrapper(&cleaned, self_ty, &slot_name);
+                let (wrapper, helper_item) =
+                    generate_slot_method_wrapper(&cleaned, self_ty, &slot_name);
                 transformed_items.push(wrapper);
+                if let Some(helper_item) = helper_item {
+                    outer_items.push(helper_item);
+                }
             }
             continue;
         }
@@ -129,9 +135,9 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
     }
 
     let pyclass_attr = if has_new {
-        quote! { #[::rustpython_vm::pyclass(with(::rustpython_vm::types::Constructor))] }
+        quote! { #[::rustpython_vm::pyclass(payload = "__Pyo3MethodHelper", with(::rustpython_vm::types::Constructor))] }
     } else {
-        quote! { #[::rustpython_vm::pyclass] }
+        quote! { #[::rustpython_vm::pyclass(payload = "__Pyo3MethodHelper")] }
     };
 
     let constructor_impl = if let Some(ref new_fn) = new_method {
@@ -156,9 +162,42 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
             #(#transformed_items)*
         }
 
+        ::pyo3::inventory::submit! {
+            #inventory_class_name::new(::pyo3::Pyo3ClassItems {
+                methods: #self_ty::__OWN_METHOD_DEFS,
+                extend_class: |ctx, class| {
+                    #self_ty::__extend_py_class(
+                        unsafe {
+                            ::std::mem::transmute::<
+                                &::rustpython_vm::Context,
+                                &'static ::rustpython_vm::Context,
+                            >(ctx)
+                        },
+                        class,
+                    )
+                },
+                extend_slots: #self_ty::__extend_slots,
+            })
+        }
+
         #constructor_impl
         #classattr_impl
+        #(#outer_items)*
     })
+}
+
+fn inventory_class_name(self_ty: &syn::Type) -> Result<syn::Ident> {
+    let base = self_ty_ident(self_ty).ok_or_else(|| {
+        syn::Error::new_spanned(self_ty, "#[pymethods] currently requires a simple type path")
+    })?;
+    Ok(format_ident!("__Pyo3InventoryFor{}", base))
+}
+
+fn self_ty_ident(self_ty: &syn::Type) -> Option<syn::Ident> {
+    match self_ty {
+        syn::Type::Path(type_path) => type_path.path.segments.last().map(|segment| segment.ident.clone()),
+        _ => None,
+    }
 }
 
 // ─── Constructor ──────────────────────────────────────────────────────────────
@@ -444,7 +483,7 @@ fn setter_needs_wrapper(method: &ImplItemFn) -> bool {
 fn generate_getter_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStream {
     let fn_name = &method.sig.ident;
     let wrapper_name = format_ident!("_pyo3_getter_{}", fn_name);
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let generics = &method.sig.generics;
     let fn_name_str = fn_name.to_string();
 
@@ -559,7 +598,7 @@ fn generate_getter_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStr
 fn generate_setter_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStream {
     let fn_name = &method.sig.ident;
     let wrapper_name = format_ident!("_pyo3_setter_{}", fn_name);
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let generics = &method.sig.generics;
     let fn_name_str = fn_name.to_string();
 
@@ -608,23 +647,60 @@ fn generate_slot_method_wrapper(
     method: &ImplItemFn,
     self_ty: &syn::Type,
     slot_name: &syn::Ident,
-) -> TokenStream {
+) -> (TokenStream, Option<TokenStream>) {
     let fn_name = &method.sig.ident;
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let wrapper_name = format_ident!("__pyo3_wrap_{}", fn_name);
     let generics = &method.sig.generics;
     let slot_name_str = slot_name.to_string();
     let attrs = &method.attrs;
+    let inner_body = &method.block;
     let inner_ret = &method.sig.output;
+    let typed_result_ty = match inner_ret {
+        ReturnType::Type(_, ty) => quote! { #ty },
+        ReturnType::Default => quote! { () },
+    };
 
     let mut wrapper_params: Vec<TokenStream> = Vec::new();
-    let mut inner_call_args: Vec<TokenStream> = Vec::new();
     let mut conversion_stmts: Vec<TokenStream> = Vec::new();
+    let mut inner_call_args: Vec<TokenStream> = Vec::new();
+    let helper_method = if method
+        .sig
+        .inputs
+        .first()
+        .is_some_and(|arg| matches!(arg, FnArg::Receiver(_)))
+    {
+        Some(strip_pyo3_method_attrs(method))
+    } else {
+        None
+    };
 
-    for arg in &method.sig.inputs {
+    let typed_receiver = method.sig.inputs.first().and_then(|arg| match arg {
+        FnArg::Typed(pt) => {
+            let ty = &pt.ty;
+            let ty_str = quote!(#ty).to_string().replace(' ', "");
+            let name = match pt.pat.as_ref() {
+                Pat::Ident(pi) => pi.ident.clone(),
+                _ => return None,
+            };
+            if ty_str.contains("PyRefMut<") {
+                Some((name, true))
+            } else if ty_str.contains("PyRef<") {
+                Some((name, false))
+            } else {
+                None
+            }
+        }
+        FnArg::Receiver(_) => None,
+    });
+
+    for (idx, arg) in method.sig.inputs.iter().enumerate() {
         match arg {
             FnArg::Receiver(_) => continue,
             FnArg::Typed(pt) => {
+                if idx == 0 && typed_receiver.is_some() {
+                    continue;
+                }
                 let ty = &pt.ty;
                 let ty_str = quote!(#ty).to_string().replace(' ', "");
                 let name = if let Pat::Ident(pi) = pt.pat.as_ref() {
@@ -635,9 +711,15 @@ fn generate_slot_method_wrapper(
                 let raw_name = format_ident!("__raw_{}", name);
 
                 if ty_str.contains("Python") {
-                    inner_call_args.push(quote! { __py });
+                    conversion_stmts.push(quote! {
+                        let #name = __py;
+                    });
+                    inner_call_args.push(quote! { #name });
                 } else if ty_str.contains("VirtualMachine") {
-                    inner_call_args.push(quote! { _vm });
+                    conversion_stmts.push(quote! {
+                        let #name = _vm;
+                    });
+                    inner_call_args.push(quote! { #name });
                 } else if ty_str == "&Self" || ty_str.ends_with("::Self") {
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(quote! {
@@ -653,12 +735,18 @@ fn generate_slot_method_wrapper(
                         gen_bound_extraction(&ty_str, &name, &raw_name);
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(extraction);
-                    inner_call_args.push(call_expr);
+                    conversion_stmts.push(quote! {
+                        let #name: #ty = #call_expr;
+                    });
+                    inner_call_args.push(quote! { #name });
                 } else if ty_str.starts_with("Option<&") {
                     let (extraction, call_expr) = gen_option_bound_extraction(&ty_str, &name);
                     wrapper_params.push(quote! { #name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(extraction);
-                    inner_call_args.push(call_expr);
+                    conversion_stmts.push(quote! {
+                        let #name: #ty = #call_expr;
+                    });
+                    inner_call_args.push(quote! { #name });
                 } else if ty_str.starts_with("Option<")
                     && !ty_str.contains("Bound")
                     && !ty_str.contains("Py<")
@@ -666,7 +754,10 @@ fn generate_slot_method_wrapper(
                     let (extraction, call_expr) = gen_option_extraction(&ty_str, &name, &raw_name);
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(extraction);
-                    inner_call_args.push(call_expr);
+                    conversion_stmts.push(quote! {
+                        let #name: #ty = #call_expr;
+                    });
+                    inner_call_args.push(quote! { #name });
                 } else {
                     let t: TokenStream = ty_str.parse().unwrap();
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
@@ -684,48 +775,99 @@ fn generate_slot_method_wrapper(
         }
     }
 
-    let mut_receiver = method.sig.inputs.first().and_then(|a| {
-        if let FnArg::Receiver(r) = a {
-            Some(r.mutability.is_some())
-        } else {
-            None
-        }
-    }).unwrap_or(false);
-
-    let wrapper_receiver = method.sig.inputs.first().and_then(|a| {
-        if let FnArg::Receiver(r) = a {
-            if r.mutability.is_some() {
-                Some(quote! { __slf: &::rustpython_vm::Py<Self> })
-            } else {
-                Some(quote! { #r })
-            }
-        } else {
-            None
-        }
-    });
-    let wrapper_receiver = wrapper_receiver.unwrap_or(quote! { &self });
-    let has_receiver = method
-        .sig
-        .inputs
-        .iter()
-        .any(|a| matches!(a, FnArg::Receiver(_)));
-    let call_expr = if has_receiver {
-        if mut_receiver {
-            quote! {
-                {
-                    let mut __pyo3_slf = ::pyo3::PyRefMut::from_vm_ref(__py, __slf.to_owned());
-                    __pyo3_slf.#fn_name(#(#inner_call_args),*)
+    let mut_receiver = typed_receiver
+        .as_ref()
+        .map(|(_, is_mut)| *is_mut)
+        .or_else(|| {
+            method.sig.inputs.first().and_then(|a| {
+                if let FnArg::Receiver(r) = a {
+                    Some(r.mutability.is_some())
+                } else {
+                    None
                 }
+            })
+        })
+        .unwrap_or(false);
+
+    let wrapper_receiver = if typed_receiver.is_some() {
+        Some(quote! { __slf: &::rustpython_vm::Py<Self> })
+    } else {
+        method.sig.inputs.first().and_then(|a| {
+            if let FnArg::Receiver(r) = a {
+                if r.mutability.is_some() {
+                    Some(quote! { __slf: &::rustpython_vm::Py<Self> })
+                } else {
+                    Some(quote! { #r })
+                }
+            } else {
+                None
+            }
+        })
+    };
+    let wrapper_receiver = wrapper_receiver.unwrap_or(quote! { &self });
+    let has_receiver = typed_receiver.is_some()
+        || method
+            .sig
+            .inputs
+            .iter()
+            .any(|a| matches!(a, FnArg::Receiver(_)));
+    let ret_handling = convert_return_to_pyobj(&method.sig.output, returns_pyo3_result(&method.sig.output));
+    let receiver_setup = if has_receiver {
+        if mut_receiver {
+            let receiver_name = typed_receiver
+                .as_ref()
+                .map(|(name, _)| quote! { #name })
+                .unwrap_or_else(|| quote! { __pyo3_slf });
+            quote! {
+                let mut #receiver_name = ::pyo3::PyRefMut::from_vm_ref(__py, __slf.to_owned());
+            }
+        } else if let Some((receiver_name, _)) = &typed_receiver {
+            quote! {
+                let #receiver_name = ::pyo3::PyRef::from_vm_ref(__py, __slf.to_owned());
             }
         } else {
-            quote! { self.#fn_name(#(#inner_call_args),*) }
+            quote! {}
         }
     } else {
-        quote! { Self::#fn_name(#(#inner_call_args),*) }
+        quote! {}
     };
-    let ret_handling = convert_return_to_pyobj(&method.sig.output, returns_pyo3_result(&method.sig.output));
+    let mutable_receiver_target = typed_receiver
+        .as_ref()
+        .map(|(name, _)| quote! { #name })
+        .unwrap_or_else(|| quote! { __pyo3_slf });
 
-    quote! {
+    let call_expr = if typed_receiver.is_some() {
+        quote! {{
+            #receiver_setup
+            #(#conversion_stmts)*
+            let __result: #typed_result_ty = { #inner_body };
+            __result
+        }}
+    } else if has_receiver {
+        if mut_receiver {
+            quote! {{
+                #receiver_setup
+                #(#conversion_stmts)*
+                let __result = #mutable_receiver_target.#fn_name(#(#inner_call_args),*);
+                __result
+            }}
+        } else {
+            quote! {{
+                #receiver_setup
+                #(#conversion_stmts)*
+                let __result = self.#fn_name(#(#inner_call_args),*);
+                __result
+            }}
+        }
+    } else {
+        quote! {{
+            #(#conversion_stmts)*
+            let __result = Self::#fn_name(#(#inner_call_args),*);
+            __result
+        }}
+    };
+
+    let wrapper = quote! {
         #(#attrs)*
         #[pymethod(name = #slot_name_str)]
         #vis fn #wrapper_name #generics(#wrapper_receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
@@ -733,14 +875,21 @@ fn generate_slot_method_wrapper(
             let __py = ::pyo3::Python::from_vm(_vm);
             let py = __py;
             let vm = _vm;
-            #(#conversion_stmts)*
             let __result = #call_expr;
             #ret_handling
         }
+    };
 
-        #[allow(dead_code)]
-        #method
-    }
+    let helper_item = helper_method.map(|helper_method| {
+        quote! {
+            impl #self_ty {
+                #[allow(dead_code)]
+                #helper_method
+            }
+        }
+    });
+
+    (wrapper, helper_item)
 }
 fn generate_slot_alias(
     self_ty: &syn::Type,
@@ -760,7 +909,7 @@ fn generate_slot_alias(
 
 fn generate_iter_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStream {
     let fn_name = &method.sig.ident;
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let generics = &method.sig.generics;
     let wrapper_name = format_ident!("__pyo3_wrap_{}", fn_name);
     let fn_name_str = fn_name.to_string();
@@ -794,7 +943,7 @@ fn generate_iter_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStrea
 
 fn generate_next_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStream {
     let fn_name = &method.sig.ident;
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let generics = &method.sig.generics;
     let wrapper_name = format_ident!("__pyo3_wrap_{}", fn_name);
     let fn_name_str = fn_name.to_string();
@@ -851,7 +1000,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
     let fn_name = &method.sig.ident;
     let wrapper_name = format_ident!("__pyo3_wrap_{}", fn_name);
     let helper_name = format_ident!("_pyo3_{}", fn_name);
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let attrs = &method.attrs;
     let generics = &method.sig.generics;
     let fn_name_str = fn_name.to_string();
@@ -1094,7 +1243,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
 fn generate_staticmethod_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> Result<TokenStream> {
     let fn_name = &method.sig.ident;
     let wrapper_name = format_ident!("_pyo3_static_{}", fn_name);
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let generics = &method.sig.generics;
     let fn_name_str = fn_name.to_string();
 
@@ -1136,7 +1285,7 @@ fn generate_staticmethod_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> Re
 fn generate_classmethod_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> Result<TokenStream> {
     let fn_name = &method.sig.ident;
     let wrapper_name = format_ident!("_pyo3_classmethod_{}", fn_name);
-    let vis = &method.vis;
+    let vis = syn::Visibility::Inherited;
     let generics = &method.sig.generics;
     let fn_name_str = fn_name.to_string();
 
@@ -1639,6 +1788,24 @@ fn convert_result_return_to_pyobj(ret: &ReturnType) -> TokenStream {
                 quote! { __result.map(|_| _vm.ctx.none()).map_err(|e: ::pyo3::PyErr| ::pyo3::err::into_vm_err(e)) }
             }
         }
+        Some(t) if t.starts_with("Option<") => {
+            if is_rustpython_result {
+                quote! {
+                    __result.and_then(|v| {
+                        ::pyo3::IntoPyObject::into_pyobject(v, __py)
+                            .map(|b| b.into_any().unbind().into_object())
+                            .map_err(|e| ::pyo3::err::into_vm_err(e.into()))
+                    })
+                }
+            } else {
+                quote! {
+                    __result.and_then(|v| {
+                        ::pyo3::IntoPyObject::into_pyobject(v, __py)
+                            .map(|b| b.into_any().unbind().into_object())
+                    }).map_err(|e: ::pyo3::PyErr| ::pyo3::err::into_vm_err(e))
+                }
+            }
+        }
         Some(t) if t.starts_with("(") => {
             if is_rustpython_result {
                 quote! {
@@ -1806,6 +1973,10 @@ fn is_rustpython_slot_method(name: &str) -> bool {
             | "__iand__"
             | "__ior__"
             | "__ixor__"
+            | "__concat__"
+            | "__inplace_concat__"
+            | "__repeat__"
+            | "__inplace_repeat__"
             | "__contains__"
             | "__iter__"
             | "__next__"
@@ -1840,6 +2011,17 @@ fn strip_pyo3_method_attrs(method: &ImplItemFn) -> ImplItemFn {
         .attrs
         .retain(|attr| !pyo3_attrs.iter().any(|name| attr.path().is_ident(name)));
     cleaned
+}
+
+fn sanitize_typed_patterns(method: &mut ImplItemFn) {
+    for arg in &mut method.sig.inputs {
+        if let FnArg::Typed(pt) = arg {
+            if let Pat::Ident(pi) = pt.pat.as_mut() {
+                pi.mutability = None;
+                pi.by_ref = None;
+            }
+        }
+    }
 }
 
 fn strip_pyo3_const_attrs(item: &ImplItemConst) -> ImplItemConst {

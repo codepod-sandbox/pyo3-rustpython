@@ -12,6 +12,7 @@ rustpython-vm = { workspace = true }
 rustpython = { workspace = true }
 pyo3-rustpython-derive = { path = "../pyo3-rustpython-derive" }
 paste = "1"
+inventory = "0.3.5"
 
 [features]
 default = []

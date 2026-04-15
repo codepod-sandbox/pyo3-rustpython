@@ -1,6 +1,8 @@
 mod any;
 mod bytes;
+mod callable;
 mod capsule;
+mod datetime;
 mod dict;
 mod iterator;
 mod list;
@@ -16,7 +18,9 @@ mod typeobj;
 
 pub use any::PyAny;
 pub use bytes::PyBytes;
+pub use callable::{PyCFunction, PyFunction};
 pub use capsule::PyCapsule;
+pub use datetime::PyDateTime;
 pub use dict::PyDict;
 pub use iterator::PyIterator;
 pub use list::PyList;
@@ -30,8 +34,12 @@ pub use string::PyString;
 pub use tuple::{PyTuple, PyTupleMethods};
 pub use typeobj::PyType;
 pub use dict::IntoPyDict;
+pub(crate) use mapping::is_registered_mapping_obj;
+pub(crate) use sequence::is_registered_sequence_obj;
 
 pub trait PyAnyMethods<'py> {
+    fn len(&self) -> crate::PyResult<usize>;
+
     fn setattr(
         &self,
         name: &str,
@@ -46,6 +54,10 @@ pub trait PyAnyMethods<'py> {
 }
 
 impl<'py, T> PyAnyMethods<'py> for Bound<'py, T> {
+    fn len(&self) -> crate::PyResult<usize> {
+        self.as_any().len()
+    }
+
     fn setattr(
         &self,
         name: &str,

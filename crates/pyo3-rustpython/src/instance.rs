@@ -315,9 +315,29 @@ impl<'py, T> Bound<'py, T> {
         if type_name.contains("::types::sequence::PySequence") {
             let vm = self.py.vm;
             return Some(
+                crate::types::is_registered_sequence_obj(&self.obj)
+                    || (!crate::types::is_registered_mapping_obj(&self.obj)
+                        && (
                 self.obj.class().fast_issubclass(vm.ctx.types.list_type)
                     || self.obj.class().fast_issubclass(vm.ctx.types.tuple_type)
-                    || vm.call_method(&self.obj, "__getitem__", (0isize,)).is_ok(),
+                    || vm.call_method(&self.obj, "__getitem__", (0isize,)).is_ok()
+                        )),
+            );
+        }
+        if type_name.contains("::types::callable::PyCFunction") {
+            return Some(self.obj.class().name().to_string() == "builtin_function_or_method");
+        }
+        if type_name.contains("::types::callable::PyFunction") {
+            return Some(
+                self.obj.class().name().to_string() == "function"
+                    || self.obj.class().name().to_string() == "builtin_function_or_method",
+            );
+        }
+        if type_name.contains("::types::datetime::PyDateTime") {
+            let vm = self.py.vm;
+            return Some(
+                self.obj.class().name().to_string() == "datetime"
+                    || vm.call_method(&self.obj, "timestamp", ()).is_ok(),
             );
         }
         None
@@ -434,6 +454,16 @@ impl<'py, T> Bound<'py, T> {
         }
     }
 
+    /// No-op conversion used by PyO3-style helper code.
+    pub fn into_bound(self) -> Bound<'py, T> {
+        self
+    }
+
+    /// Borrow as an untyped `Bound<'py, PyAny>`.
+    pub fn as_ref(&self) -> &Bound<'py, crate::types::PyAny> {
+        self.as_any()
+    }
+
     /// Detach from the `Python<'py>` lifetime, producing a `Py<T>`.
     pub fn unbind(self) -> Py<T> {
         Py::from_object(self.obj)
@@ -452,6 +482,30 @@ impl<'py, T> Bound<'py, T> {
     pub fn extract<R: crate::FromPyObject<'py>>(&self) -> crate::PyResult<R> {
         let ob = self.as_any();
         R::extract_bound(ob)
+    }
+
+    pub fn borrow(&self) -> PyRef<'py, T>
+    where
+        T: rustpython_vm::PyPayload,
+    {
+        let inner = self
+            .obj
+            .clone()
+            .try_into_value(self.py.vm)
+            .expect("Bound::borrow(): wrong payload type");
+        PyRef::from_vm_ref(self.py, inner)
+    }
+
+    pub fn borrow_mut(&self) -> PyRefMut<'py, T>
+    where
+        T: rustpython_vm::PyPayload,
+    {
+        let inner = self
+            .obj
+            .clone()
+            .try_into_value(self.py.vm)
+            .expect("Bound::borrow_mut(): wrong payload type");
+        PyRefMut::from_vm_ref(self.py, inner)
     }
 
     /// Get an attribute by name. Works on any `Bound<'py, T>`.
@@ -484,6 +538,7 @@ impl<'py, T> Bound<'py, T> {
         let result = crate::err::from_vm_result(method.call_with_args(func_args, vm))?;
         Ok(Bound::from_object(self.py, result))
     }
+
 
     /// Python `==` comparison.
     pub fn eq<O: crate::conversion::ToPyObject>(&self, other: O) -> crate::PyResult<bool> {
@@ -583,6 +638,13 @@ impl<'py, T> Bound<'py, T> {
             let vm = self.py.vm;
             use rustpython_vm::builtins::PyDict;
             if self.obj.downcast_ref::<PyDict>().is_some() {
+                return Ok(Bound {
+                    py: self.py,
+                    obj: self.obj.clone(),
+                    _marker: PhantomData,
+                });
+            }
+            if crate::types::is_registered_mapping_obj(&self.obj) {
                 return Ok(Bound {
                     py: self.py,
                     obj: self.obj.clone(),
@@ -797,6 +859,13 @@ impl<'a, 'py> Borrowed<'a, 'py, crate::types::PyAny> {
                     _marker: std::marker::PhantomData,
                 });
             }
+            if crate::types::is_registered_mapping_obj(&self.obj) {
+                return Ok(Bound {
+                    py: self.py,
+                    obj: self.obj.clone(),
+                    _marker: std::marker::PhantomData,
+                });
+            }
             if vm.call_method(&self.obj, "items", ()).is_ok() {
                 return Ok(Bound {
                     py: self.py,
@@ -906,5 +975,32 @@ impl<'py, T: rustpython_vm::PyPayload> crate::conversion::IntoPyObject<'py> for 
     ) -> Result<Bound<'py, crate::types::PyAny>, Self::Error> {
         let obj: rustpython_vm::PyObjectRef = self.inner.into();
         Ok(Bound::from_object(self.py, obj))
+    }
+}
+
+impl<'py, T: rustpython_vm::PyPayload> crate::conversion::IntoPyObject<'py> for PyRefMut<'py, T> {
+    type Target = crate::types::PyAny;
+    type Error = crate::PyErr;
+
+    fn into_pyobject(
+        self,
+        _py: crate::Python<'py>,
+    ) -> Result<Bound<'py, crate::types::PyAny>, Self::Error> {
+        let obj: rustpython_vm::PyObjectRef = self.inner.into();
+        Ok(Bound::from_object(self.py, obj))
+    }
+}
+
+impl<'py, T: rustpython_vm::PyPayload> From<PyRef<'py, T>> for Py<T> {
+    fn from(value: PyRef<'py, T>) -> Self {
+        let obj: rustpython_vm::PyObjectRef = value.inner.into();
+        Py::from_object(obj)
+    }
+}
+
+impl<'py, T: rustpython_vm::PyPayload> From<PyRefMut<'py, T>> for Py<T> {
+    fn from(value: PyRefMut<'py, T>) -> Self {
+        let obj: rustpython_vm::PyObjectRef = value.inner.into();
+        Py::from_object(obj)
     }
 }

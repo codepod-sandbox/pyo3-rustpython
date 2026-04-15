@@ -29,6 +29,37 @@ unsafe impl Sync for PyErr {}
 
 pub type PyResult<T = ()> = Result<T, PyErr>;
 
+trait ExceptionTypeArg {
+    fn into_type_ref(
+        &self,
+        py: crate::Python<'_>,
+    ) -> crate::PyResult<rustpython_vm::builtins::PyTypeRef>;
+}
+
+impl<'py> ExceptionTypeArg for crate::Bound<'py, crate::types::PyType> {
+    fn into_type_ref(
+        &self,
+        py: crate::Python<'_>,
+    ) -> crate::PyResult<rustpython_vm::builtins::PyTypeRef> {
+        self.obj
+            .clone()
+            .try_into_value::<rustpython_vm::builtins::PyTypeRef>(py.vm)
+            .map_err(crate::PyErr::from_vm_err)
+    }
+}
+
+impl<'a, 'py> ExceptionTypeArg for &'a crate::Bound<'py, crate::types::PyType> {
+    fn into_type_ref(
+        &self,
+        py: crate::Python<'_>,
+    ) -> crate::PyResult<rustpython_vm::builtins::PyTypeRef> {
+        self.obj
+            .clone()
+            .try_into_value::<rustpython_vm::builtins::PyTypeRef>(py.vm)
+            .map_err(crate::PyErr::from_vm_err)
+    }
+}
+
 impl PyErr {
     /// Construct from a RustPython base exception reference.
     #[doc(hidden)]
@@ -84,17 +115,14 @@ impl PyErr {
     }
 
     /// Check if this exception matches a given type object.
-    pub fn matches(
+    pub fn matches<T: ExceptionTypeArg>(
         &self,
         py: crate::Python<'_>,
-        ty: &crate::Bound<'_, crate::types::PyType>,
+        ty: T,
     ) -> crate::PyResult<bool> {
         let obj: &rustpython_vm::PyObject = self.inner.as_ref();
-        Ok(obj.fast_isinstance(
-            ty.obj
-                .downcast_ref::<rustpython_vm::builtins::PyType>()
-                .expect("Bound<PyType> must wrap a type"),
-        ))
+        let ty = ty.into_type_ref(py)?;
+        Ok(obj.fast_isinstance(ty.as_ref()))
     }
 
     /// Create a PyErr from an existing Python exception object (Bound).
@@ -139,6 +167,13 @@ impl PyErr {
 
     pub fn display<'py>(&self, py: crate::Python<'py>) -> crate::Bound<'py, crate::types::PyAny> {
         self.value(py)
+    }
+
+    pub fn cause<'py>(&self, py: crate::Python<'py>) -> Option<Self> {
+        self.value(py)
+            .getattr("__cause__")
+            .ok()
+            .and_then(|obj| if obj.is_none() { None } else { Some(PyErr::from_value(obj)) })
     }
 }
 

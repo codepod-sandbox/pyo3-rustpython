@@ -122,6 +122,24 @@ impl<'py> Bound<'py, PyList> {
     }
 }
 
+impl<'py> IntoIterator for &Bound<'py, PyList> {
+    type Item = Bound<'py, PyAny>;
+    type IntoIter = BoundListIterator<'py>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'py> IntoIterator for Bound<'py, PyList> {
+    type Item = Bound<'py, PyAny>;
+    type IntoIter = BoundListIterator<'py>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// Iterator over elements of a `Bound<'py, PyList>` (or any iterable via Python protocol).
 pub struct BoundListIterator<'py> {
     py: crate::python::Python<'py>,
