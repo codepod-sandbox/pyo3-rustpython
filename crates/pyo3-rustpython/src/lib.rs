@@ -62,13 +62,15 @@ pub mod interp {
 }
 
 pub use bound_object::BoundObject;
-pub use conversion::{ArgIntoBool, FromPyObject, IntoPy, IntoPyObject, ToPyObject};
+pub use conversion::{ArgIntoBool, FromPyObject, FromPyObjectOwned, IntoPy, IntoPyObject, ToPyObject};
 pub use err::{PyErr, PyResult};
 pub use instance::{Borrowed, Bound, Py, PyRef, PyRefMut};
 pub use pyclass::CompareOp;
 pub use pyo3_rustpython_derive::{pyclass, pyfunction, pymethods, pymodule, FromPyObject};
 pub use python::Python;
 pub use types::module::WrapPyFn;
+
+pub trait PyClass: PyTypeInfo {}
 
 pub trait PyTypeInfo {
     const NAME: &'static str;
@@ -78,7 +80,7 @@ pub trait PyTypeInfo {
     where
         Self: PyTypeObjectExt + Sized,
     {
-        <Self as PyTypeObjectExt>::type_object(py)
+        <Self as PyTypeObjectExt>::type_object_bound(py)
     }
 }
 
@@ -87,7 +89,7 @@ pub trait PyTypeObjectExt {
     where
         Self: Sized;
 
-    fn type_object(py: Python<'_>) -> Bound<'_, types::PyType>
+    fn type_object_bound(py: Python<'_>) -> Bound<'_, types::PyType>
     where
         Self: Sized,
     {

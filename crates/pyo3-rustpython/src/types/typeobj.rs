@@ -50,7 +50,7 @@ impl<'py> Bound<'py, PyType> {
     }
 
     pub fn is_subclass_of<T: crate::PyTypeObjectExt>(&self) -> PyResult<bool> {
-        Ok(self.is_subtype_of(&T::type_object(self.py)))
+        Ok(self.is_subtype_of(&T::type_object_bound(self.py)))
     }
 
     pub fn is_subclass(&self, other: &Bound<'py, PyType>) -> PyResult<bool> {

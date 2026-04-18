@@ -104,7 +104,7 @@ impl<'py> Python<'py> {
 
     /// Get the Python type object for `T`.
     pub fn get_type<T: crate::PyTypeObjectExt>(self) -> crate::Bound<'py, crate::types::PyType> {
-        T::type_object(self)
+        T::type_object_bound(self)
     }
 
     /// Import a Python module by name.

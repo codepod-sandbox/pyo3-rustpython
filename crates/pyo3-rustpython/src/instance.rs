@@ -89,7 +89,7 @@ impl Py<crate::types::PyAny> {
     pub fn new<'py, T, I>(py: Python<'py>, value: I) -> crate::PyResult<Py<T>>
     where
         I: Into<PyClassInitializer<T>>,
-        T: rustpython_vm::PyPayload + std::fmt::Debug,
+        T: crate::PyClass + rustpython_vm::PyPayload + std::fmt::Debug,
     {
         match value.into() {
             PyClassInitializer::Value(value) => {
@@ -138,9 +138,9 @@ impl Py<crate::types::PyAny> {
     }
 
     /// Extract a Rust value from this Python object.
-    pub fn extract<'py, T: crate::FromPyObject<'py>>(&self, py: Python<'py>) -> crate::PyResult<T> {
+    pub fn extract<'py, T: crate::FromPyObjectOwned<'py>>(&self, py: Python<'py>) -> crate::PyResult<T> {
         let bound = Bound::<crate::types::PyAny>::from_object(py, self.obj.clone());
-        T::extract_bound(&bound)
+        T::extract_bound(&bound).map_err(Into::into)
     }
 
     /// Convert into a `Bound<'py, PyAny>`.
@@ -259,7 +259,7 @@ impl<'py, T> Bound<'py, T> {
     pub fn new<I>(py: Python<'py>, value: I) -> crate::PyResult<Bound<'py, T>>
     where
         I: Into<PyClassInitializer<T>>,
-        T: rustpython_vm::PyPayload + std::fmt::Debug,
+        T: crate::PyClass + rustpython_vm::PyPayload + std::fmt::Debug,
     {
         let py_obj = <Py<crate::types::PyAny>>::new(py, value)?;
         Ok(Bound::from_object(py, py_obj.obj))
@@ -479,9 +479,9 @@ impl<'py, T> Bound<'py, T> {
     }
 
     /// Extract a Rust value from this Python object.
-    pub fn extract<R: crate::FromPyObject<'py>>(&self) -> crate::PyResult<R> {
+    pub fn extract<R: crate::FromPyObjectOwned<'py>>(&self) -> crate::PyResult<R> {
         let ob = self.as_any();
-        R::extract_bound(ob)
+        R::extract_bound(ob).map_err(Into::into)
     }
 
     pub fn borrow(&self) -> PyRef<'py, T>
@@ -836,9 +836,9 @@ impl<'a, 'py> Borrowed<'a, 'py, crate::types::PyAny> {
     }
 
     /// Extract a value from this borrowed reference.
-    pub fn extract<T: crate::FromPyObject<'py>>(&self) -> crate::PyResult<T> {
+    pub fn extract<T: crate::FromPyObjectOwned<'py>>(&self) -> crate::PyResult<T> {
         let bound = Bound::<crate::types::PyAny>::from_object(self.py, self.obj.clone());
-        T::extract_bound(&bound)
+        T::extract_bound(&bound).map_err(Into::into)
     }
 
     /// Convert into an owned `Bound<'py, PyAny>`.
@@ -967,6 +967,7 @@ impl<'py, T: rustpython_vm::PyPayload> std::ops::DerefMut for PyRefMut<'py, T> {
 /// This enables `into_pyobject(py)` calls in generated wrappers.
 impl<'py, T: rustpython_vm::PyPayload> crate::conversion::IntoPyObject<'py> for PyRef<'py, T> {
     type Target = crate::types::PyAny;
+    type Output = Bound<'py, crate::types::PyAny>;
     type Error = crate::PyErr;
 
     fn into_pyobject(
@@ -980,6 +981,7 @@ impl<'py, T: rustpython_vm::PyPayload> crate::conversion::IntoPyObject<'py> for 
 
 impl<'py, T: rustpython_vm::PyPayload> crate::conversion::IntoPyObject<'py> for PyRefMut<'py, T> {
     type Target = crate::types::PyAny;
+    type Output = Bound<'py, crate::types::PyAny>;
     type Error = crate::PyErr;
 
     fn into_pyobject(

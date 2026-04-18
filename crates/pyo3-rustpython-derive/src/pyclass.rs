@@ -136,9 +136,11 @@ pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
 
     let from_py_object_impl = if options.from_py_object {
         quote! {
-            impl<'py> ::pyo3::FromPyObject<'py> for #struct_name {
+            impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #struct_name {
+                type Error = ::pyo3::PyErr;
+
                 fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
-                    let ref_val: &#struct_name = <&#struct_name as ::pyo3::FromPyObject<'py>>::extract_bound(ob)?;
+                    let ref_val: &#struct_name = <&#struct_name as ::pyo3::FromPyObject<'_, '_>>::extract_bound(ob)?;
                     Ok(ref_val.clone())
                 }
             }
@@ -207,6 +209,7 @@ pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
 
         impl<'py> ::pyo3::IntoPyObject<'py> for #struct_name {
             type Target = ::pyo3::types::PyAny;
+            type Output = ::pyo3::Bound<'py, Self::Target>;
             type Error = ::pyo3::PyErr;
 
             fn into_pyobject(self, py: ::pyo3::Python<'py>) -> Result<::pyo3::Bound<'py, Self::Target>, Self::Error> {
@@ -220,7 +223,11 @@ pub fn expand(attr: TokenStream, mut input: ItemStruct) -> Result<TokenStream> {
             const MODULE: Option<&'static str> = None;
         }
 
-        impl<'py> ::pyo3::FromPyObject<'py> for &'py #struct_name {
+        impl ::pyo3::PyClass for #struct_name {}
+
+        impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for &'py #struct_name {
+            type Error = ::pyo3::PyErr;
+
             fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
                 ob.downcast_payload::<#struct_name>()
                     .ok_or_else(|| ::pyo3::PyErr::new_type_error(ob.py(), "type mismatch"))
@@ -463,6 +470,7 @@ pub fn expand_enum(attr: TokenStream, mut input: ItemEnum) -> Result<TokenStream
 
         impl<'py> ::pyo3::IntoPyObject<'py> for #enum_name {
             type Target = ::pyo3::types::PyAny;
+            type Output = ::pyo3::Bound<'py, Self::Target>;
             type Error = ::pyo3::PyErr;
 
             fn into_pyobject(self, py: ::pyo3::Python<'py>) -> Result<::pyo3::Bound<'py, Self::Target>, Self::Error> {
@@ -475,6 +483,8 @@ pub fn expand_enum(attr: TokenStream, mut input: ItemEnum) -> Result<TokenStream
             const NAME: &'static str = #enum_name_str;
             const MODULE: Option<&'static str> = None;
         }
+
+        impl ::pyo3::PyClass for #enum_name {}
 
         impl ::pyo3::Pyo3Accessors for #enum_name {
             fn __pyo3_register_accessors(

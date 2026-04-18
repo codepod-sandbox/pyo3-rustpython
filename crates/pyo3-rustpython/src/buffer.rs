@@ -82,7 +82,9 @@ impl<T: Element> PyBuffer<T> {
     }
 }
 
-impl<'py, T: Element> crate::FromPyObject<'py> for PyBuffer<T> {
+impl<'a, 'py, T: Element> crate::FromPyObject<'a, 'py> for PyBuffer<T> {
+    type Error = crate::PyErr;
+
     fn extract_bound(
         ob: &crate::Bound<'py, crate::types::PyAny>,
     ) -> crate::PyResult<Self> {

@@ -112,7 +112,7 @@ impl PyCFunction {
                 Ok::<
                     rustpython_vm::PyObjectRef,
                     rustpython_vm::PyRef<rustpython_vm::builtins::PyBaseException>,
-                >(bound.into_any().obj)
+                >(crate::BoundObject::into_any(bound).obj)
             },
         );
         let obj: rustpython_vm::PyObjectRef = func.into();

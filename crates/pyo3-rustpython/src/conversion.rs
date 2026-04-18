@@ -13,20 +13,34 @@ use crate::instance::{Borrowed, Bound};
 use crate::python::Python;
 use crate::types::PyAny;
 
-pub trait FromPyObject<'py>: Sized {
-    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self>;
+pub trait IntoPyObject<'py> {
+    type Target;
+    type Output: crate::BoundObject<'py, Self::Target>;
+    type Error: Into<PyErr>;
 
-    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error>;
+}
+
+pub trait FromPyObject<'a, 'py>: Sized {
+    type Error: Into<PyErr>;
+
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> Result<Self, Self::Error> {
+        let borrowed = ob.as_borrowed();
+        // SAFETY: shim `Borrowed` owns a ref-counted object handle and does not borrow from `ob`
+        // in the Rust aliasing sense, so widening the marker lifetime is sound here.
+        let borrowed =
+            unsafe { std::mem::transmute::<Borrowed<'_, 'py, PyAny>, Borrowed<'a, 'py, PyAny>>(borrowed) };
+        Self::extract(borrowed)
+    }
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
         Self::extract_bound(&ob.into_bound())
     }
 }
 
-pub trait IntoPyObject<'py> {
-    type Target;
-    type Error: Into<PyErr>;
+pub trait FromPyObjectOwned<'py>: for<'a> FromPyObject<'a, 'py, Error = PyErr> {}
 
-    fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, Self::Target>, Self::Error>;
-}
+impl<'py, T> FromPyObjectOwned<'py> for T where T: for<'a> FromPyObject<'a, 'py, Error = PyErr> {}
 
 pub trait ToPyObject {
     fn to_object<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny>;
@@ -46,7 +60,9 @@ fn new_bound<'py>(py: Python<'py>, obj: PyObjectRef) -> Bound<'py, PyAny> {
 
 macro_rules! impl_from_py_via_try_from_object {
     ($($t:ty),* $(,)?) => { $(
-        impl<'py> FromPyObject<'py> for $t {
+        impl<'a, 'py> FromPyObject<'a, 'py> for $t {
+            type Error = PyErr;
+
             fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
                 let vm = ob.py().vm;
                 map_vm_err(<$t as RpTryFromObject>::try_from_object(vm, ob.obj.clone()))
@@ -59,9 +75,11 @@ impl_from_py_via_try_from_object!(
     i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, bool, String,
 );
 
-impl<'py> FromPyObject<'py> for Cow<'py, str> {
+impl<'a, 'py> FromPyObject<'a, 'py> for Cow<'py, str> {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
-        let s: String = FromPyObject::extract_bound(ob)?;
+        let s: String = <String as FromPyObject<'_, 'py>>::extract_bound(ob)?;
         Ok(Cow::Owned(s))
     }
 }
@@ -70,6 +88,7 @@ macro_rules! impl_into_pyobject_via_to_pyobject {
     ($($t:ty),* $(,)?) => { $(
         impl<'py> IntoPyObject<'py> for $t {
             type Target = PyAny;
+            type Output = Bound<'py, PyAny>;
             type Error = PyErr;
 
             fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -107,8 +126,15 @@ impl<T> ToPyObject for crate::Bound<'_, T> {
     }
 }
 
+impl<T> ToPyObject for crate::Borrowed<'_, '_, T> {
+    fn to_object<'py>(&self, py: Python<'py>) -> crate::Bound<'py, PyAny> {
+        new_bound(py, self.obj.clone())
+    }
+}
+
 impl<'a, 'py, T> IntoPyObject<'py> for &'a crate::Bound<'py, T> {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -116,7 +142,9 @@ impl<'a, 'py, T> IntoPyObject<'py> for &'a crate::Bound<'py, T> {
     }
 }
 
-impl<'py> FromPyObject<'py> for f64 {
+impl<'a, 'py> FromPyObject<'a, 'py> for f64 {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         match ob.obj.downcast_ref::<PyFloat>() {
@@ -133,15 +161,18 @@ impl<'py> FromPyObject<'py> for f64 {
     }
 }
 
-impl<'py> FromPyObject<'py> for f32 {
+impl<'a, 'py> FromPyObject<'a, 'py> for f32 {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
-        let val: f64 = FromPyObject::extract_bound(ob)?;
+        let val: f64 = <f64 as FromPyObject<'_, 'py>>::extract_bound(ob)?;
         Ok(val as f32)
     }
 }
 
 impl<'py> IntoPyObject<'py> for &str {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -153,6 +184,7 @@ impl<'py> IntoPyObject<'py> for &str {
 
 impl<'py> IntoPyObject<'py> for &String {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -194,6 +226,7 @@ impl<T> rustpython_vm::convert::ToPyObject for &crate::Py<T> {
 
 impl<'py, T> IntoPyObject<'py> for crate::Py<T> {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -203,6 +236,7 @@ impl<'py, T> IntoPyObject<'py> for crate::Py<T> {
 
 impl<'a, 'py, T> IntoPyObject<'py> for &'a crate::Py<T> {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -242,7 +276,12 @@ impl<T: ToPyObject> ToPyObject for Vec<T> {
     }
 }
 
-impl<'py, T: FromPyObject<'py>> FromPyObject<'py> for Option<T> {
+impl<'a, 'py, T> FromPyObject<'a, 'py> for Option<T>
+where
+    T: FromPyObject<'a, 'py, Error = PyErr>,
+{
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         if vm.is_none(&ob.obj) {
@@ -255,14 +294,12 @@ impl<'py, T: FromPyObject<'py>> FromPyObject<'py> for Option<T> {
 
 impl<'py, T: IntoPyObject<'py>> IntoPyObject<'py> for Option<T> {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
         match self {
-            Some(val) => val
-                .into_pyobject(py)
-                .map(|b| b.into_any())
-                .map_err(Into::into),
+            Some(val) => val.into_pyobject(py).map(|b| crate::BoundObject::into_any(b)).map_err(Into::into),
             None => {
                 let none: PyObjectRef = py.vm.ctx.none();
                 Ok(new_bound(py, none))
@@ -271,7 +308,12 @@ impl<'py, T: IntoPyObject<'py>> IntoPyObject<'py> for Option<T> {
     }
 }
 
-impl<'py, T: FromPyObject<'py>> FromPyObject<'py> for Vec<T> {
+impl<'a, 'py, T> FromPyObject<'a, 'py> for Vec<T>
+where
+    T: FromPyObject<'a, 'py, Error = PyErr>,
+{
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         let py = ob.py();
@@ -292,13 +334,14 @@ where
     T::Error: Into<PyErr>,
 {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
         let vm = py.vm;
         let mut elements = Vec::with_capacity(self.len());
         for item in self {
-            elements.push(item.into_pyobject(py).map_err(Into::into)?.into_any().obj);
+            elements.push(crate::BoundObject::into_any(item.into_pyobject(py).map_err(Into::into)?).obj);
         }
         let obj: PyObjectRef = vm.ctx.new_list(elements).into();
         Ok(new_bound(py, obj))
@@ -311,24 +354,27 @@ where
     T::Error: Into<PyErr>,
 {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
         let vm = py.vm;
         let mut elements = Vec::with_capacity(N);
         for item in self {
-            elements.push(item.into_pyobject(py).map_err(Into::into)?.into_any().obj);
+            elements.push(crate::BoundObject::into_any(item.into_pyobject(py).map_err(Into::into)?).obj);
         }
         let obj: PyObjectRef = vm.ctx.new_list(elements).into();
         Ok(new_bound(py, obj))
     }
 }
 
-impl<'py, K, V> FromPyObject<'py> for HashMap<K, V>
+impl<'a, 'py, K, V> FromPyObject<'a, 'py> for HashMap<K, V>
 where
-    K: FromPyObject<'py> + Eq + Hash,
-    V: FromPyObject<'py>,
+    K: FromPyObject<'a, 'py, Error = PyErr> + Eq + Hash,
+    V: FromPyObject<'a, 'py, Error = PyErr>,
 {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let py = ob.py();
         let dict: &rustpython_vm::Py<PyDict> = ob
@@ -353,14 +399,15 @@ where
     V: IntoPyObject<'py>,
 {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
         let vm = py.vm;
         let dict = vm.ctx.new_dict();
         for (k, v) in self {
-            let key_obj = k.into_pyobject(py).map_err(Into::into)?.into_any().obj;
-            let val_obj = v.into_pyobject(py).map_err(Into::into)?.into_any().obj;
+            let key_obj = crate::BoundObject::into_any(k.into_pyobject(py).map_err(Into::into)?).obj;
+            let val_obj = crate::BoundObject::into_any(v.into_pyobject(py).map_err(Into::into)?).obj;
             map_vm_err(dict.set_item(&*key_obj, val_obj, vm))?;
         }
         let obj: PyObjectRef = dict.into();
@@ -368,7 +415,9 @@ where
     }
 }
 
-impl<'py> FromPyObject<'py> for () {
+impl<'a, 'py> FromPyObject<'a, 'py> for () {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let tuple = ob
             .obj
@@ -386,6 +435,7 @@ impl<'py> FromPyObject<'py> for () {
 
 impl<'py> IntoPyObject<'py> for () {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -397,7 +447,12 @@ impl<'py> IntoPyObject<'py> for () {
 
 macro_rules! impl_tuple {
     ($len:literal; $($idx:tt: $T:ident),+) => {
-        impl<'py, $($T: FromPyObject<'py>),+> FromPyObject<'py> for ($($T,)+) {
+        impl<'a, 'py, $($T),+> FromPyObject<'a, 'py> for ($($T,)+)
+        where
+            $($T: FromPyObject<'a, 'py, Error = PyErr>),+
+        {
+            type Error = PyErr;
+
             fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
                 let py = ob.py();
                 let tuple = ob
@@ -426,13 +481,14 @@ macro_rules! impl_tuple {
 
         impl<'py, $($T: IntoPyObject<'py>),+> IntoPyObject<'py> for ($($T,)+) {
             type Target = PyAny;
+            type Output = Bound<'py, PyAny>;
             type Error = PyErr;
 
             fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
                 let vm = py.vm;
                 let elements: Vec<PyObjectRef> = vec![
                     $(
-                        self.$idx.into_pyobject(py).map_err(Into::into)?.into_any().obj,
+                        crate::BoundObject::into_any(self.$idx.into_pyobject(py).map_err(Into::into)?).obj,
                     )+
                 ];
                 let obj: PyObjectRef = vm.ctx.new_tuple(elements).into();
@@ -449,7 +505,9 @@ impl_tuple!(4; 0: T1, 1: T2, 2: T3, 3: T4);
 impl_tuple!(5; 0: T1, 1: T2, 2: T3, 3: T4, 4: T5);
 impl_tuple!(6; 0: T1, 1: T2, 2: T3, 3: T4, 4: T5, 5: T6);
 
-impl<'py> FromPyObject<'py> for Bound<'py, PyAny> {
+impl<'a, 'py> FromPyObject<'a, 'py> for Bound<'py, PyAny> {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         Ok(ob.clone())
     }
@@ -457,6 +515,7 @@ impl<'py> FromPyObject<'py> for Bound<'py, PyAny> {
 
 impl<'py, T> IntoPyObject<'py> for Bound<'py, T> {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, _py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -464,7 +523,9 @@ impl<'py, T> IntoPyObject<'py> for Bound<'py, T> {
     }
 }
 
-impl<'py> FromPyObject<'py> for PyObjectRef {
+impl<'a, 'py> FromPyObject<'a, 'py> for PyObjectRef {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         Ok(ob.obj.clone())
     }
@@ -472,6 +533,7 @@ impl<'py> FromPyObject<'py> for PyObjectRef {
 
 impl<'py> IntoPyObject<'py> for PyObjectRef {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -512,13 +574,17 @@ impl<'py> IntoPyArgs<'py> for &Bound<'py, crate::types::PyTuple> {
     }
 }
 
-impl<'py> FromPyObject<'py> for crate::Py<PyAny> {
+impl<'a, 'py> FromPyObject<'a, 'py> for crate::Py<PyAny> {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         Ok(crate::Py::from_object(ob.obj.clone()))
     }
 }
 
-impl<'py> FromPyObject<'py> for crate::pyclass::CompareOp {
+impl<'a, 'py> FromPyObject<'a, 'py> for crate::pyclass::CompareOp {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         let int_val: i32 = map_vm_err(rustpython_vm::convert::TryFromObject::try_from_object(
@@ -541,7 +607,9 @@ impl<'py> FromPyObject<'py> for crate::pyclass::CompareOp {
     }
 }
 
-impl<'py> FromPyObject<'py> for &'py str {
+impl<'a, 'py> FromPyObject<'a, 'py> for &'py str {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         let s: rustpython_vm::builtins::PyStrRef = map_vm_err(ob.obj.clone().try_into_value(vm))?;
@@ -554,6 +622,7 @@ impl<'py> FromPyObject<'py> for &'py str {
 
 impl<'py> IntoPyObject<'py> for PyErr {
     type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Bound<'py, PyAny>, PyErr> {
@@ -561,7 +630,9 @@ impl<'py> IntoPyObject<'py> for PyErr {
     }
 }
 
-impl<'py, T: rustpython_vm::PyPayload + crate::PyTypeObjectExt> FromPyObject<'py> for crate::Py<T> {
+impl<'a, 'py, T: rustpython_vm::PyPayload + crate::PyTypeObjectExt> FromPyObject<'a, 'py> for crate::Py<T> {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         let inner: rustpython_vm::PyRef<T> = map_vm_err(ob.obj.clone().try_into_value(vm))?;
@@ -578,7 +649,9 @@ impl From<ArgIntoBool> for bool {
     }
 }
 
-impl<'py> FromPyObject<'py> for ArgIntoBool {
+impl<'a, 'py> FromPyObject<'a, 'py> for ArgIntoBool {
+    type Error = PyErr;
+
     fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
         let vm = ob.py().vm;
         map_vm_err(ob.obj.clone().try_to_bool(vm)).map(ArgIntoBool)

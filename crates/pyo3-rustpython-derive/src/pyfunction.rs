@@ -235,7 +235,7 @@ fn gen_extraction(
         let t: TokenStream = inner.parse().unwrap();
         return Ok((
             quote! {
-                let #name = <&#t as ::pyo3::FromPyObject>::extract_bound(
+                let #name = <&#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                     &::pyo3::Bound::from_object(
                         ::pyo3::Python::from_vm(__vm),
                         __args.take_positional_keyword(#py_name).ok_or_else(|| {
@@ -359,7 +359,7 @@ fn gen_extraction(
             let t: TokenStream = ty_str.parse().unwrap();
             Ok((
                 quote! {
-                                                    let #name = match <#t as ::pyo3::FromPyObject>::extract_bound(
+                                                    let #name = match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                                                         &::pyo3::Bound::from_object(
                                                             ::pyo3::Python::from_vm(__vm),
                                                             __args.take_positional_keyword(#py_name).ok_or_else(|| {
@@ -479,7 +479,7 @@ fn gen_option_extraction(
                         if __vm.is_none(&__obj) {
                             None
                         } else {
-                            Some(<&#t as ::pyo3::FromPyObject>::extract_bound(
+                            Some(<&#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                                 &::pyo3::Bound::from_object(::pyo3::Python::from_vm(__vm), __obj)
                             ).map_err(|e: ::pyo3::PyErr| ::pyo3::err::into_vm_err(e))?)
                         }
@@ -653,7 +653,7 @@ fn gen_option_extraction(
                         Some(__obj) => {
                             if __vm.is_none(&__obj) { None }
                             else {
-                                match <#t as ::pyo3::FromPyObject>::extract_bound(
+                                match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                                     &::pyo3::Bound::from_object(::pyo3::Python::from_vm(__vm), __obj)
                                 ) {
                                     Ok(v) => Some(v),

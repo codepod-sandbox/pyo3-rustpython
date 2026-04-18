@@ -140,7 +140,9 @@ fn derive_from_py_object_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             };
 
             Ok(quote! {
-                impl<'py> ::pyo3::FromPyObject<'py> for #ident {
+                impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #ident {
+                    type Error = ::pyo3::PyErr;
+
                     fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
                         #extract_tuple
                         Ok(#ident( #(#field_pats),* ))
@@ -156,7 +158,9 @@ fn derive_from_py_object_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
                 .collect();
             let field_types: Vec<_> = named.named.iter().map(|f| &f.ty).collect();
             Ok(quote! {
-                impl<'py> ::pyo3::FromPyObject<'py> for #ident {
+                impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #ident {
+                    type Error = ::pyo3::PyErr;
+
                     fn extract_bound(ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
                         Ok(Self {
                             #(
@@ -170,7 +174,9 @@ fn derive_from_py_object_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             })
         }
         syn::Fields::Unit => Ok(quote! {
-            impl<'py> ::pyo3::FromPyObject<'py> for #ident {
+            impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #ident {
+                type Error = ::pyo3::PyErr;
+
                 fn extract_bound(_ob: &::pyo3::Bound<'py, ::pyo3::types::PyAny>) -> ::pyo3::PyResult<Self> {
                     Ok(#ident)
                 }

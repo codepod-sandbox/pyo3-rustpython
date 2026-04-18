@@ -75,8 +75,8 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
 
         if has_attr(&method.attrs, "staticmethod") {
             let cleaned = strip_pyo3_method_attrs(method);
-            if needs_wrapper(&cleaned) {
-                let wrapper = generate_staticmethod_wrapper(&cleaned, self_ty)?;
+            if needs_wrapper(method, self_ty) {
+                let wrapper = generate_staticmethod_wrapper(method, self_ty)?;
                 transformed_items.push(wrapper);
             } else {
                 transformed_items.push(quote! {
@@ -89,8 +89,8 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
 
         if has_attr(&method.attrs, "classmethod") {
             let cleaned = strip_pyo3_method_attrs(method);
-            if needs_wrapper(&cleaned) {
-                let wrapper = generate_classmethod_wrapper(&cleaned, self_ty)?;
+            if needs_wrapper(method, self_ty) {
+                let wrapper = generate_classmethod_wrapper(method, self_ty)?;
                 transformed_items.push(wrapper);
             } else {
                 transformed_items.push(quote! {
@@ -123,9 +123,10 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
             continue;
         }
 
-        if needs_wrapper(&cleaned) {
-            let wrapper = generate_pyresult_wrapper(&cleaned, self_ty);
+        if needs_wrapper(method, self_ty) {
+            let (wrapper, helper_items) = generate_pyresult_wrapper(method, self_ty);
             transformed_items.push(wrapper);
+            outer_items.extend(helper_items);
         } else {
             transformed_items.push(quote! {
                 #[pymethod]
@@ -156,6 +157,17 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
         })
     };
 
+    let extend_slots = if has_new {
+        quote! {
+            |slots: &mut ::rustpython_vm::types::PyTypeSlots| {
+                #self_ty::__extend_slots(slots);
+                slots.new.store(Some(<#self_ty as ::rustpython_vm::types::Constructor>::slot_new as _));
+            }
+        }
+    } else {
+        quote! { #self_ty::__extend_slots }
+    };
+
     Ok(quote! {
         #pyclass_attr
         impl #self_ty {
@@ -176,7 +188,7 @@ pub fn expand(_attr: TokenStream, input: ItemImpl) -> Result<TokenStream> {
                         class,
                     )
                 },
-                extend_slots: #self_ty::__extend_slots,
+                extend_slots: #extend_slots,
             })
         }
 
@@ -208,7 +220,7 @@ fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result
     let mut inner_fn = strip_pyo3_method_attrs(new_fn);
     inner_fn.sig.ident = inner_name.clone();
     let ret_str = return_type_string(&new_fn.sig.output);
-    let signature_defaults = parse_constructor_signature_defaults(&new_fn.attrs)?;
+    let signature_spec = parse_signature_spec(&new_fn.attrs)?;
 
     let returns_result = ret_str.contains("PyResult");
     let returns_tuple = ret_str.contains("Self,") || ret_str.contains("Self ,");
@@ -222,13 +234,15 @@ fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result
 
     let (py_extraction, py_call_args) = generate_funcargs_extraction(new_fn)?;
 
-    let py_new_call_expr = if let Some(signature_defaults) = signature_defaults {
+    let py_new_call_expr = if let Some(signature_spec) = signature_spec {
         let mut helper_fields = Vec::new();
         let mut helper_field_names = Vec::new();
         let mut binding_stmts = Vec::new();
         let mut call_args = Vec::new();
-        let mut helper_defaults = signature_defaults.into_iter();
+        let mut helper_specs = signature_spec.into_iter();
         let mut required_count = 0usize;
+        let mut max_positional = 0usize;
+        let mut has_varargs = false;
 
         for arg in &new_fn.sig.inputs {
             let FnArg::Typed(pt) = arg else {
@@ -251,25 +265,62 @@ fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result
                 }
             };
 
-            let default = helper_defaults.next().flatten();
+            let spec = helper_specs.next();
             let py_name = name.to_string();
-            if let Some(default) = default {
+            let varargs = spec.as_ref().is_some_and(|spec| spec.varargs);
+            let var_keyword = spec.as_ref().is_some_and(|spec| spec.var_keyword);
+            let keyword_only = spec.as_ref().is_some_and(|spec| spec.keyword_only);
+            let positional_only = spec.as_ref().is_some_and(|spec| spec.positional_only);
+            let default = spec.and_then(|spec| spec.default);
+            let take_expr = if keyword_only {
+                quote! { args.take_keyword(#py_name) }
+            } else if positional_only {
+                max_positional += 1;
+                quote! { args.take_positional() }
+            } else {
+                max_positional += 1;
+                quote! { args.take_positional_keyword(#py_name) }
+            };
+            if varargs {
+                has_varargs = true;
+                binding_stmts.push(quote! {
+                    let #name = vm.ctx.new_tuple(args.args.drain(..).collect::<::std::vec::Vec<_>>()).into();
+                });
+            } else if var_keyword {
+                binding_stmts.push(quote! {
+                    let #name = if args.kwargs.is_empty() {
+                        vm.ctx.none()
+                    } else {
+                        let __kwds = vm.ctx.new_dict();
+                        for (__key, __value) in args.remaining_keywords() {
+                            __kwds
+                                .set_item(&__key, __value, vm)
+                                .map_err(::rustpython_vm::function::ArgumentError::Exception)?;
+                        }
+                        __kwds.into()
+                    };
+                });
+            } else if let Some(default) = default {
                 let default_raw = if is_none_expr(&default) {
                     quote! { vm.ctx.none() }
                 } else {
                     quote! { ::rustpython_vm::convert::ToPyObject::to_pyobject(#default, vm) }
                 };
                 binding_stmts.push(quote! {
-                    let #name = args
-                        .take_positional_keyword(#py_name)
-                        .unwrap_or_else(|| #default_raw);
+                    let #name = #take_expr.unwrap_or_else(|| #default_raw);
                 });
             } else {
-                required_count += 1;
+                if !keyword_only {
+                    required_count += 1;
+                }
                 binding_stmts.push(quote! {
-                    let #name = args
-                        .take_positional_keyword(#py_name)
-                        .ok_or(::rustpython_vm::function::ArgumentError::TooFewArgs)?;
+                    let #name = #take_expr.ok_or(
+                        if #keyword_only {
+                            ::rustpython_vm::function::ArgumentError::RequiredKeywordArgument(#py_name.to_owned())
+                        } else {
+                            ::rustpython_vm::function::ArgumentError::TooFewArgs
+                        }
+                    )?;
                 });
             }
 
@@ -291,7 +342,7 @@ fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result
 
             impl ::rustpython_vm::function::FromArgs for #helper_name {
                 fn arity() -> ::std::ops::RangeInclusive<usize> {
-                    #required_count..=#helper_total_count
+                    #required_count..=if #has_varargs { ::std::primitive::usize::MAX } else { #max_positional }
                 }
 
                 fn from_args(
@@ -388,7 +439,31 @@ fn generate_constructor_impl(new_fn: &ImplItemFn, self_ty: &syn::Type) -> Result
             }
         })
     } else {
-        None
+        let slot_body = if returns_result {
+            quote! {{
+                let payload: Self = #py_new_call_expr
+                    .map_err(|e: ::pyo3::PyErr| ::pyo3::err::into_vm_err(e))?;
+                <Self as ::rustpython_vm::PyPayload>::into_ref_with_type(payload, vm, cls)
+                    .map(Into::into)
+            }}
+        } else {
+            quote! {{
+                let payload: Self = #py_new_call_expr;
+                <Self as ::rustpython_vm::PyPayload>::into_ref_with_type(payload, vm, cls)
+                    .map(Into::into)
+            }}
+        };
+
+        Some(quote! {
+            fn slot_new(
+                cls: ::rustpython_vm::builtins::PyTypeRef,
+                _args: Self::Args,
+                vm: &::rustpython_vm::VirtualMachine,
+            ) -> ::rustpython_vm::PyResult {
+                let _vm = vm;
+                #slot_body
+            }
+        })
     };
 
     Ok(quote! {
@@ -664,16 +739,7 @@ fn generate_slot_method_wrapper(
     let mut wrapper_params: Vec<TokenStream> = Vec::new();
     let mut conversion_stmts: Vec<TokenStream> = Vec::new();
     let mut inner_call_args: Vec<TokenStream> = Vec::new();
-    let helper_method = if method
-        .sig
-        .inputs
-        .first()
-        .is_some_and(|arg| matches!(arg, FnArg::Receiver(_)))
-    {
-        Some(strip_pyo3_method_attrs(method))
-    } else {
-        None
-    };
+    let helper_method = Some(strip_pyo3_method_attrs(method));
 
     let typed_receiver = method.sig.inputs.first().and_then(|arg| match arg {
         FnArg::Typed(pt) => {
@@ -724,7 +790,7 @@ fn generate_slot_method_wrapper(
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(quote! {
                         let __bound_self = ::pyo3::Bound::from_object(__py, #raw_name);
-                        let #name: &#self_ty = match <&#self_ty as ::pyo3::FromPyObject>::extract_bound(&__bound_self) {
+                        let #name: &#self_ty = match <&#self_ty as ::pyo3::FromPyObject<'_, '_>>::extract_bound(&__bound_self) {
                             Ok(v) => v,
                             Err(e) => return Err(::pyo3::err::into_vm_err(e)),
                         };
@@ -762,7 +828,7 @@ fn generate_slot_method_wrapper(
                     let t: TokenStream = ty_str.parse().unwrap();
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(quote! {
-                        let #name: #t = match <#t as ::pyo3::FromPyObject>::extract_bound(
+                        let #name: #t = match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                             &::pyo3::Bound::from_object(__py, #raw_name.clone())
                         ) {
                             Ok(v) => v,
@@ -837,10 +903,14 @@ fn generate_slot_method_wrapper(
         .unwrap_or_else(|| quote! { __pyo3_slf });
 
     let call_expr = if typed_receiver.is_some() {
+        let receiver_name = typed_receiver
+            .as_ref()
+            .map(|(name, _)| quote! { #name })
+            .unwrap();
         quote! {{
             #receiver_setup
             #(#conversion_stmts)*
-            let __result: #typed_result_ty = { #inner_body };
+            let __result: #typed_result_ty = Self::#fn_name(#receiver_name, #(#inner_call_args),*);
             __result
         }}
     } else if has_receiver {
@@ -914,25 +984,43 @@ fn generate_iter_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStrea
     let wrapper_name = format_ident!("__pyo3_wrap_{}", fn_name);
     let fn_name_str = fn_name.to_string();
     let ret_str = return_type_string(&method.sig.output);
+    let receiver_setup = match method.sig.inputs.first() {
+        Some(FnArg::Receiver(_)) => quote! {},
+        Some(FnArg::Typed(pt)) => {
+            let ty_str = quote!(#pt.ty).to_string().replace(' ', "");
+            if ty_str.contains("PyRef<") {
+                quote! {
+                    let slf = ::pyo3::PyRef::from_vm_ref(__py, __raw_slf.clone());
+                }
+            } else if ty_str.contains("PyRefMut<") {
+                quote! {
+                    let mut slf = ::pyo3::PyRefMut::from_vm_ref(__py, __raw_slf.clone());
+                }
+            } else {
+                quote! {}
+            }
+        }
+        None => quote! {},
+    };
     let call_expr = match method.sig.inputs.first() {
-        Some(FnArg::Receiver(_)) => quote! { slf.#fn_name() },
+        Some(FnArg::Receiver(_)) => quote! { __raw_slf.#fn_name() },
         _ => quote! { Self::#fn_name(slf) },
     };
     let ret_handling = convert_non_result_return_to_pyobj(&method.sig.output);
     let body = if ret_str.contains("&Self") || ret_str.contains("PyRef<") {
-        quote! { Ok(slf.to_owned().into()) }
+        quote! { Ok(__raw_slf.into()) }
     } else {
         quote! {
+            #receiver_setup
             let __result = #call_expr;
             #ret_handling
         }
     };
     quote! {
         #[pymethod(name = #fn_name_str)]
-        #vis fn #wrapper_name #generics(slf: &::rustpython_vm::Py<#self_ty>, vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
+        #vis fn #wrapper_name #generics(__raw_slf: ::rustpython_vm::PyRef<#self_ty>, vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
             let _vm = vm;
             let __py = ::pyo3::Python::from_vm(_vm);
-            let vm = _vm;
             #body
         }
 
@@ -956,13 +1044,12 @@ fn generate_next_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStrea
     quote! {
         #[pymethod(name = #fn_name_str)]
         #vis fn #wrapper_name #generics(
-            slf: &::rustpython_vm::Py<#self_ty>,
+            __raw_slf: ::rustpython_vm::PyRef<#self_ty>,
             vm: &::rustpython_vm::VirtualMachine,
         ) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
             let _vm = vm;
             let __py = ::pyo3::Python::from_vm(_vm);
-            let slf = slf.to_owned();
-            let mut slf = ::pyo3::PyRefMut::from_vm_ref(__py, slf);
+            let mut slf = ::pyo3::PyRefMut::from_vm_ref(__py, __raw_slf);
             let __result = #call_expr;
             ::pyo3::__next_option_to_result(__result, __py)
         }
@@ -974,7 +1061,14 @@ fn generate_next_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStrea
 
 // ─── Regular Method Wrappers ──────────────────────────────────────────────────
 
-fn needs_wrapper(method: &ImplItemFn) -> bool {
+fn needs_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> bool {
+    if parse_signature_spec(&method.attrs)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return true;
+    }
     if method.sig.inputs.iter().any(|arg| matches!(arg, FnArg::Receiver(r) if r.mutability.is_some())) {
         return true;
     }
@@ -985,8 +1079,12 @@ fn needs_wrapper(method: &ImplItemFn) -> bool {
         return true;
     }
     let ret_str = return_type_string(&method.sig.output);
+    let self_ty_str = quote!(#self_ty).to_string().replace(' ', "");
     if ret_str.contains("Py<")
         || ret_str.contains("Bound<")
+        || ret_str == "Self"
+        || ret_str.ends_with("::Self")
+        || (!self_ty_str.is_empty() && ret_str == self_ty_str)
         || ret_str.starts_with("Option<")
         || ret_str.starts_with("Vec<")
         || ret_str.starts_with("(")
@@ -996,10 +1094,9 @@ fn needs_wrapper(method: &ImplItemFn) -> bool {
     false
 }
 
-fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenStream {
+fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> (TokenStream, Vec<TokenStream>) {
     let fn_name = &method.sig.ident;
     let wrapper_name = format_ident!("__pyo3_wrap_{}", fn_name);
-    let helper_name = format_ident!("_pyo3_{}", fn_name);
     let vis = syn::Visibility::Inherited;
     let attrs = &method.attrs;
     let generics = &method.sig.generics;
@@ -1039,7 +1136,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
                     wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                     conversion_stmts.push(quote! {
                         let __bound_self = ::pyo3::Bound::from_object(__py, #raw_name);
-                        let #name: &#self_ty = match <&#self_ty as ::pyo3::FromPyObject>::extract_bound(&__bound_self) {
+                        let #name: &#self_ty = match <&#self_ty as ::pyo3::FromPyObject<'_, '_>>::extract_bound(&__bound_self) {
                             Ok(v) => v,
                             Err(e) => return Err(::pyo3::err::into_vm_err(e)),
                         };
@@ -1054,11 +1151,14 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
                 } else if ty_str.contains("PyRefMut<") {
                     wrapper_params.push(quote! { __slf: ::rustpython_vm::PyRef<Self> });
                     conversion_stmts.push(quote! {
-                        let #name = unsafe { ::rustpython_vm::PyRefMut::from_pyref_unchecked(__slf) };
+                        let #name = ::pyo3::PyRefMut::from_vm_ref(__py, __slf.clone());
                     });
                     inner_call_args.push(quote! { #name });
                 } else if ty_str.contains("PyRef<") {
-                    wrapper_params.push(quote! { #name: ::rustpython_vm::PyRef<Self> });
+                    wrapper_params.push(quote! { __slf: ::rustpython_vm::PyRef<Self> });
+                    conversion_stmts.push(quote! {
+                        let #name = ::pyo3::PyRef::from_vm_ref(__py, __slf.clone());
+                    });
                     inner_call_args.push(quote! { #name });
                 } else if ty_str.starts_with("Option<&") {
                     let (extraction, call_expr) = gen_option_bound_extraction(&ty_str, &name);
@@ -1093,7 +1193,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
                         let t: TokenStream = ty_str.parse().unwrap();
                         wrapper_params.push(quote! { #raw_name: ::rustpython_vm::PyObjectRef });
                         conversion_stmts.push(quote! {
-                            let #name: #t = match <#t as ::pyo3::FromPyObject>::extract_bound(
+                            let #name: #t = match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                                 &::pyo3::Bound::from_object(__py, #raw_name.clone())
                             ) {
                                 Ok(v) => v,
@@ -1113,18 +1213,6 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
         .iter()
         .filter(|a| !matches!(a, FnArg::Receiver(_)))
         .collect();
-    let helper_call_args: Vec<TokenStream> = method
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            FnArg::Receiver(_) => None,
-            FnArg::Typed(pt) => match pt.pat.as_ref() {
-                Pat::Ident(pi) => Some(quote! { #pi }),
-                _ => None,
-            },
-        })
-        .collect();
     let inner_ret = &method.sig.output;
     let inner_body = &method.block;
     let has_receiver = method
@@ -1132,6 +1220,7 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
         .inputs
         .iter()
         .any(|a| matches!(a, FnArg::Receiver(_)));
+    let signature_spec = parse_signature_spec(&method.attrs).ok().flatten();
 
     let wrapper_receiver = method.sig.inputs.first().and_then(|a| {
         if let FnArg::Receiver(r) = a {
@@ -1181,62 +1270,254 @@ fn generate_pyresult_wrapper(method: &ImplItemFn, self_ty: &syn::Type) -> TokenS
     } else {
         quote! { Self::#fn_name(#(#inner_call_args),*) }
     };
-    let helper_call_expr = if has_receiver {
-        quote! { self.#fn_name(#(#helper_call_args),*) }
-    } else {
-        quote! { Self::#fn_name(#(#helper_call_args),*) }
-    };
+    let manual_signature_binding = signature_spec.map(|signature_spec| {
+        let mut helper_fields = Vec::new();
+        let mut helper_field_names = Vec::new();
+        let mut binding_stmts = Vec::new();
+        let mut call_args = Vec::new();
+        let mut helper_specs = signature_spec.into_iter();
+        let mut required_count = 0usize;
+        let mut max_positional = 0usize;
+        let mut has_varargs = false;
+
+        for arg in &method.sig.inputs {
+            let FnArg::Typed(pt) = arg else {
+                continue;
+            };
+            let ty = &pt.ty;
+            let ty_str = quote!(#ty).to_string().replace(' ', "");
+            if ty_str.contains("Python") || ty_str.contains("VirtualMachine") {
+                continue;
+            }
+            let name = match pt.pat.as_ref() {
+                Pat::Ident(pi) => pi.ident.clone(),
+                _ => continue,
+            };
+
+            let spec = helper_specs.next();
+            let py_name = name.to_string();
+            let varargs = spec.as_ref().is_some_and(|spec| spec.varargs);
+            let var_keyword = spec.as_ref().is_some_and(|spec| spec.var_keyword);
+            let keyword_only = spec.as_ref().is_some_and(|spec| spec.keyword_only);
+            let positional_only = spec.as_ref().is_some_and(|spec| spec.positional_only);
+            let default = spec.and_then(|spec| spec.default);
+            let take_expr = if keyword_only {
+                quote! { __raw_args.take_keyword(#py_name) }
+            } else if positional_only {
+                max_positional += 1;
+                quote! { __raw_args.take_positional() }
+            } else {
+                max_positional += 1;
+                quote! { __raw_args.take_positional_keyword(#py_name) }
+            };
+
+            if varargs {
+                has_varargs = true;
+                binding_stmts.push(quote! {
+                    let #name = _vm.ctx.new_tuple(__raw_args.args.drain(..).collect::<::std::vec::Vec<_>>()).into();
+                });
+            } else if var_keyword {
+                binding_stmts.push(quote! {
+                    let #name = if __raw_args.kwargs.is_empty() {
+                        _vm.ctx.none()
+                    } else {
+                        let __kwds = _vm.ctx.new_dict();
+                        for (__key, __value) in __raw_args.remaining_keywords() {
+                            __kwds
+                                .set_item(&__key, __value, _vm)
+                                .map_err(::rustpython_vm::function::ArgumentError::Exception)?;
+                        }
+                        __kwds.into()
+                    };
+                });
+            } else if let Some(default) = default {
+                let default_raw = if is_none_expr(&default) {
+                    quote! { _vm.ctx.none() }
+                } else {
+                    quote! { ::rustpython_vm::convert::ToPyObject::to_pyobject(#default, _vm) }
+                };
+                binding_stmts.push(quote! {
+                    let #name = #take_expr.unwrap_or_else(|| #default_raw);
+                });
+            } else {
+                if !keyword_only {
+                    required_count += 1;
+                }
+                binding_stmts.push(quote! {
+                    let #name = #take_expr.ok_or(
+                        if #keyword_only {
+                            ::rustpython_vm::function::ArgumentError::RequiredKeywordArgument(#py_name.to_owned())
+                        } else {
+                            ::rustpython_vm::function::ArgumentError::TooFewArgs
+                        }
+                    )?;
+                });
+            }
+
+            helper_fields.push(quote! {
+                #name: ::rustpython_vm::PyObjectRef,
+            });
+            helper_field_names.push(name.clone());
+            call_args.push(quote! { __sig_args.#name });
+        }
+
+        let helper_name = format_ident!("_Pyo3MethodArgs_{}", fn_name);
+        let (sig_py_extraction, sig_py_call_args) =
+            generate_funcargs_extraction(method).expect("signature-bearing method extraction");
+        let sig_call_expr = if has_receiver {
+            if mut_receiver {
+                quote! {
+                    {
+                        let mut self_ = ::pyo3::PyRefMut::from_vm_ref(__py, __slf.to_owned());
+                        self_.#fn_name(#sig_py_call_args)
+                    }
+                }
+            } else {
+                quote! { __slf.#fn_name(#sig_py_call_args) }
+            }
+        } else {
+            quote! { Self::#fn_name(#sig_py_call_args) }
+        };
+        let receiver_extract = if has_receiver {
+            quote! {
+                let __slf: ::rustpython_vm::PyRef<Self> = __raw_args
+                    .take_positional()
+                    .ok_or_else(|| _vm.new_type_error("missing self"))?
+                    .try_into_value(_vm)?;
+            }
+        } else {
+            quote! {}
+        };
+        quote! {
+            #[allow(non_camel_case_types, dead_code)]
+            struct #helper_name {
+                #(#helper_fields)*
+            }
+
+            impl ::rustpython_vm::function::FromArgs for #helper_name {
+                fn arity() -> ::std::ops::RangeInclusive<usize> {
+                    #required_count..=if #has_varargs { ::std::primitive::usize::MAX } else { #max_positional }
+                }
+
+                fn from_args(
+                    _vm: &::rustpython_vm::VirtualMachine,
+                    __raw_args: &mut ::rustpython_vm::function::FuncArgs,
+                ) -> ::core::result::Result<Self, ::rustpython_vm::function::ArgumentError> {
+                    #(#binding_stmts)*
+                    Ok(Self {
+                        #(#helper_field_names),*
+                    })
+                }
+            }
+
+            #receiver_extract
+            let __sig_args: #helper_name = __raw_args.bind(_vm)?;
+            let mut __args = ::rustpython_vm::function::FuncArgs::from(vec![
+                #(#call_args),*
+            ]);
+            #sig_py_extraction
+            let __result = #sig_call_expr;
+        }
+    });
 
     let py_inject = quote! {};
 
     if is_result {
         let ret_handling = convert_result_return_to_pyobj(&method.sig.output);
-        quote! {
+        let use_raw_wrapper = manual_signature_binding.is_some();
+        let wrapper_args = if use_raw_wrapper {
+            quote! { vm: &::rustpython_vm::VirtualMachine, mut __raw_args: ::rustpython_vm::function::FuncArgs }
+        } else {
+            quote! { #(#wrapper_params),* }
+        };
+        let result_setup = if let Some(binding) = manual_signature_binding.clone() {
+            binding
+        } else {
+            quote! {
+                #(#conversion_stmts)*
+                let __result = #call_expr;
+            }
+        };
+        let wrapper_attr = if use_raw_wrapper {
+            quote! { #[pymethod(raw, name = #fn_name_str)] }
+        } else {
+            quote! { #[pymethod(name = #fn_name_str)] }
+        };
+        let wrapper_sig = if use_raw_wrapper {
+            quote! { #wrapper_args }
+        } else if wrapper_params.is_empty() {
+            quote! { #wrapper_receiver, vm: &::rustpython_vm::VirtualMachine }
+        } else {
+            quote! { #wrapper_receiver, #wrapper_args, vm: &::rustpython_vm::VirtualMachine }
+        };
+        let wrapper = quote! {
             #(#attrs)*
-            #[pymethod(name = #fn_name_str)]
-            #vis fn #wrapper_name #generics(#wrapper_receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
+            #wrapper_attr
+            #vis fn #wrapper_name #generics(#wrapper_sig) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
                 let _vm = vm;
-                let __py = ::pyo3::Python::from_vm(_vm);
+                let __py = unsafe { ::pyo3::Python::assume_attached() };
                 let py = __py;
                 let vm = _vm;
                 #py_inject
-                #(#conversion_stmts)*
-                let __result = #call_expr;
+                #result_setup
                 #ret_handling
             }
-
-            #[allow(dead_code)]
-            #vis fn #fn_name #generics #inner_signature #inner_ret #inner_body
-
-            #[allow(dead_code)]
-            #vis fn #helper_name #generics #inner_signature #inner_ret {
-                #helper_call_expr
+        };
+        let outer_items = vec![quote! {
+            impl #self_ty {
+                #[allow(dead_code)]
+                #vis fn #fn_name #generics #inner_signature #inner_ret #inner_body
             }
-        }
+        }];
+        (wrapper, outer_items)
     } else {
         let ret_handling = convert_non_result_return_to_pyobj(&method.sig.output);
-        quote! {
+        let use_raw_wrapper = manual_signature_binding.is_some();
+        let wrapper_args = if use_raw_wrapper {
+            quote! { vm: &::rustpython_vm::VirtualMachine, mut __raw_args: ::rustpython_vm::function::FuncArgs }
+        } else {
+            quote! { #(#wrapper_params),* }
+        };
+        let result_setup = if let Some(binding) = manual_signature_binding {
+            binding
+        } else {
+            quote! {
+                #(#conversion_stmts)*
+                let __result = #call_expr;
+            }
+        };
+        let wrapper_attr = if use_raw_wrapper {
+            quote! { #[pymethod(raw, name = #fn_name_str)] }
+        } else {
+            quote! { #[pymethod(name = #fn_name_str)] }
+        };
+        let wrapper_sig = if use_raw_wrapper {
+            quote! { #wrapper_args }
+        } else if wrapper_params.is_empty() {
+            quote! { #wrapper_receiver, vm: &::rustpython_vm::VirtualMachine }
+        } else {
+            quote! { #wrapper_receiver, #wrapper_args, vm: &::rustpython_vm::VirtualMachine }
+        };
+        let wrapper = quote! {
             #(#attrs)*
-            #[pymethod(name = #fn_name_str)]
-            #vis fn #wrapper_name #generics(#wrapper_receiver, #(#wrapper_params,)* vm: &::rustpython_vm::VirtualMachine) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
+            #wrapper_attr
+            #vis fn #wrapper_name #generics(#wrapper_sig) -> ::rustpython_vm::PyResult<::rustpython_vm::PyObjectRef> {
                 let _vm = vm;
-                let __py = ::pyo3::Python::from_vm(_vm);
+                let __py = unsafe { ::pyo3::Python::assume_attached() };
                 let py = __py;
                 let vm = _vm;
                 #py_inject
-                #(#conversion_stmts)*
-                let __result = #call_expr;
+                #result_setup
                 #ret_handling
             }
-
-            #[allow(dead_code)]
-            #vis fn #fn_name #generics #inner_signature #inner_ret #inner_body
-
-            #[allow(dead_code)]
-            #vis fn #helper_name #generics #inner_signature #inner_ret {
-                #helper_call_expr
+        };
+        let outer_items = vec![quote! {
+            impl #self_ty {
+                #[allow(dead_code)]
+                #vis fn #fn_name #generics #inner_signature #inner_ret #inner_body
             }
-        }
+        }];
+        (wrapper, outer_items)
     }
 }
 
@@ -1413,6 +1694,17 @@ fn gen_extraction_for_ty(ty_str: &str, name: &syn::Ident) -> Result<(TokenStream
             },
             quote! { #name.to_string() },
         )),
+        "PathBuf" => Ok((
+            quote! {
+                let #name: ::std::path::PathBuf = {
+                    let __s: ::rustpython_vm::builtins::PyStrRef = __args.take_positional().ok_or_else(|| {
+                        _vm.new_type_error(format!("missing required argument: {}", stringify!(#name)))
+                    })?.try_into_value(_vm).map_err(|e| e)?;
+                    ::std::path::PathBuf::from(__s.to_string())
+                };
+            },
+            quote! { #name },
+        )),
         "bool" => Ok((
             quote! {
                 let #name: bool = __args.take_positional().ok_or_else(|| {
@@ -1470,7 +1762,7 @@ fn gen_extraction_for_ty(ty_str: &str, name: &syn::Ident) -> Result<(TokenStream
                 let t: TokenStream = ty_str.parse().unwrap();
                 Ok((
                     quote! {
-                        let #name = match <#t as ::pyo3::FromPyObject>::extract_bound(
+                        let #name = match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                             &::pyo3::Bound::from_object(
                                 ::pyo3::Python::from_vm(_vm),
                                 __args.take_positional().ok_or_else(|| {
@@ -1615,7 +1907,7 @@ fn gen_option_extraction_for_ty(
                             Some(__obj) => {
                                 if _vm.is_none(&__obj) { None }
                                 else {
-                                    match <#t as ::pyo3::FromPyObject>::extract_bound(
+                                    match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                                 &::pyo3::Bound::from_object(::pyo3::Python::from_vm(_vm), __obj)
                                     ) {
                                         Ok(v) => Some(v),
@@ -1724,7 +2016,7 @@ fn gen_option_extraction(
             (
                 quote! {
                         let #name: Option<#t> = if _vm.is_none(&#raw_name) { None } else {
-                            match <#t as ::pyo3::FromPyObject>::extract_bound(
+                            match <#t as ::pyo3::FromPyObject<'_, '_>>::extract_bound(
                                 &::pyo3::Bound::from_object(::pyo3::Python::from_vm(_vm), #raw_name.clone())
                             ) {
                             Ok(v) => Some(v),
@@ -2133,7 +2425,16 @@ fn collect_fn_params(func: &ImplItemFn) -> Result<Vec<(syn::Ident, syn::Type)>> 
     Ok(params)
 }
 
-fn parse_constructor_signature_defaults(attrs: &[syn::Attribute]) -> Result<Option<Vec<Option<Expr>>>> {
+#[derive(Clone)]
+struct SignatureArgSpec {
+    default: Option<Expr>,
+    positional_only: bool,
+    keyword_only: bool,
+    varargs: bool,
+    var_keyword: bool,
+}
+
+fn parse_signature_spec(attrs: &[syn::Attribute]) -> Result<Option<Vec<SignatureArgSpec>>> {
     for attr in attrs {
         if !attr.path().is_ident("pyo3") {
             continue;
@@ -2149,12 +2450,28 @@ fn parse_constructor_signature_defaults(attrs: &[syn::Attribute]) -> Result<Opti
             let content;
             syn::parenthesized!(content in value);
 
-            let mut parsed = Vec::new();
+            let mut parsed: Vec<SignatureArgSpec> = Vec::new();
+            let mut keyword_only = false;
+            let mut next_varargs = false;
+            let mut next_var_keyword = false;
             while !content.is_empty() {
                 if content.peek(Token![/]) {
                     content.parse::<Token![/]>()?;
+                    for spec in &mut parsed {
+                        if !spec.keyword_only {
+                            spec.positional_only = true;
+                        }
+                    }
                 } else if content.peek(Token![*]) {
                     content.parse::<Token![*]>()?;
+                    if content.peek(Token![*]) {
+                        content.parse::<Token![*]>()?;
+                        next_var_keyword = true;
+                    } else if content.peek(syn::Ident) {
+                        next_varargs = true;
+                    } else {
+                        keyword_only = true;
+                    }
                 } else {
                     let _: syn::Ident = content.parse()?;
                     let default = if content.peek(Token![=]) {
@@ -2163,7 +2480,15 @@ fn parse_constructor_signature_defaults(attrs: &[syn::Attribute]) -> Result<Opti
                     } else {
                         None
                     };
-                    parsed.push(default);
+                    parsed.push(SignatureArgSpec {
+                        default,
+                        positional_only: false,
+                        keyword_only,
+                        varargs: next_varargs,
+                        var_keyword: next_var_keyword,
+                    });
+                    next_varargs = false;
+                    next_var_keyword = false;
                 }
 
                 if content.peek(Comma) {
