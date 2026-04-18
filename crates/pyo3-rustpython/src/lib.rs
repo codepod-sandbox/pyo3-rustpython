@@ -291,39 +291,33 @@ pub mod prelude {
 macro_rules! wrap_pyfunction {
     ($func:ident, $module:expr) => {
         $crate::paste! {
-            unsafe {
-                extern "Rust" {
-                    fn [<__pyo3_wrap_symbol_ $func>](__py: $crate::Python<'_>) -> ::rustpython_vm::PyObjectRef;
-                }
-                let __obj = [<__pyo3_wrap_symbol_ $func>]($module.py());
-                Ok::<_, $crate::PyErr>($crate::Bound::<$crate::types::PyAny>::from_object($module.py(), __obj))
-            }
+            Ok::<_, $crate::PyErr>([<__pyo3_fn_ $func>]($module.py()))
         }
     };
     ($func:ident) => {
         $crate::paste! {
             {
                 fn __wrap<'py>(__py: $crate::Python<'py>) -> Result<$crate::Bound<'py, $crate::types::PyAny>, $crate::PyErr> {
-                    unsafe {
-                        extern "Rust" {
-                            fn [<__pyo3_wrap_symbol_ $func>](__py: $crate::Python<'_>) -> ::rustpython_vm::PyObjectRef;
-                        }
-                        let __obj = [<__pyo3_wrap_symbol_ $func>](__py);
-                        Ok($crate::Bound::<$crate::types::PyAny>::from_object(__py, __obj))
-                    }
+                    Ok([<__pyo3_fn_ $func>](__py))
                 }
                 __wrap
             }
         }
     };
     ($mod:ident :: $func:ident, $module:expr) => {
-        $crate::wrap_pyfunction!($func, $module)
+        $crate::paste! {
+            Ok::<_, $crate::PyErr>($mod::[<__pyo3_fn_ $func>]($module.py()))
+        }
     };
     ($a:ident :: $b:ident :: $func:ident, $module:expr) => {
-        $crate::wrap_pyfunction!($func, $module)
+        $crate::paste! {
+            Ok::<_, $crate::PyErr>($a::$b::[<__pyo3_fn_ $func>]($module.py()))
+        }
     };
     (crate :: $mod:ident :: $func:ident, $module:expr) => {
-        $crate::wrap_pyfunction!($func, $module)
+        $crate::paste! {
+            Ok::<_, $crate::PyErr>(crate::$mod::[<__pyo3_fn_ $func>]($module.py()))
+        }
     };
 }
 

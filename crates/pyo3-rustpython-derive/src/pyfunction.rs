@@ -7,7 +7,6 @@ pub fn expand(attr: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
     let fn_name = &input.sig.ident;
     let mut fn_name_str = fn_name.to_string();
     let wrapper_name = format_ident!("__pyo3_fn_{}", fn_name);
-    let symbol_wrapper_name = format_ident!("__pyo3_wrap_symbol_{}", fn_name);
 
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
@@ -89,16 +88,6 @@ pub fn expand(attr: TokenStream, mut input: ItemFn) -> Result<TokenStream> {
             );
             let __callable = __heap_def.build_function(__vm);
             ::pyo3::Bound::from_object(__py, __callable.into())
-        }
-
-        #[doc(hidden)]
-        #[unsafe(no_mangle)]
-        pub extern "Rust" fn #symbol_wrapper_name(
-            __py: ::pyo3::Python<'_>,
-        ) -> ::rustpython_vm::PyObjectRef {
-            let __bound = #wrapper_name(__py);
-            let __obj: ::rustpython_vm::PyObjectRef = __bound.into_any().into();
-            __obj
         }
     })
 }

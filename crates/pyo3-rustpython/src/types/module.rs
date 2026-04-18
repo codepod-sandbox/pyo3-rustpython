@@ -33,6 +33,15 @@ impl<'py, T> IntoAddWrapped<'py> for PyResult<Bound<'py, T>> {
     }
 }
 
+impl<'py, F> IntoAddWrapped<'py> for F
+where
+    F: FnOnce(Python<'py>) -> PyResult<Bound<'py, PyAny>>,
+{
+    fn into_wrapped(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self(py)
+    }
+}
+
 pub struct WrapPyFn;
 
 impl IntoAddWrapped<'_> for WrapPyFn {
